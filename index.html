@@ -266,8 +266,10 @@
             setStatus('loading', '자막 내용을 불러오는 중...');
             try {
                 const track = captionTracks[idx];
-                // 서버가 자막을 파싱하여 JSON 배열로 반환함
-                const resp = await fetch(`/api/subtitle?url=${encodeURIComponent(track.baseUrl)}`);
+                // 서버가 videoId+lang으로 직접 YouTube에 요청하여 자막을 가져옴
+                const params = new URLSearchParams({ lang: track.languageCode });
+                if (track.kind) params.set('kind', track.kind);
+                const resp = await fetch(`/api/subtitle/${currentVideoId}?${params}`);
                 const text = await resp.text();
 
                 let data;

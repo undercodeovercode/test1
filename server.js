@@ -5,13 +5,26 @@ const PORT = 3000;
 app.use(express.static('.'));
 
 /*
+ * YouTube 요청에 사용할 브라우저 헤더.
+ * 헤더 없이 요청하면 YouTube가 봇으로 인식하여 빈 응답(0바이트)을 반환한다.
+ * User-Agent + Accept-Language + Cookie(CONSENT)를 설정하면
+ * 일반 브라우저 요청과 동일하게 취급된다.
+ */
+const BROWSER_HEADERS = {
+    'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+    'Accept-Language': 'ko,en;q=0.9',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    Cookie: 'CONSENT=PENDING+987',
+};
+
+/*
  * GET /api/captions/:videoId
- * → { title, tracks: [{ label, languageCode, kind, baseUrl }] }
  *
- * 왜 InnerTube API를 쓰는가:
- *   YouTube 페이지 HTML(500KB+)을 파싱하는 것보다
- *   InnerTube Player API(JSON 응답)가 가볍고, 봇 감지에 강하며,
- *   captionTracks를 구조화된 JSON으로 바로 받을 수 있다.
+ * InnerTube Player API로 자막 트랙 목록을 가져온다.
+ * baseUrl은 서명이 ip=0.0.0.0으로 되어있어 직접 사용할 수 없으므로,
+ * 클라이언트에는 languageCode와 kind만 전달한다.
+ * 실제 자막 내용은 /api/subtitle 에서 서버가 URL을 직접 구성하여 가져온다.
  */
 app.get('/api/captions/:videoId', async (req, res) => {
     const { videoId } = req.params;
@@ -20,7 +33,6 @@ app.get('/api/captions/:videoId', async (req, res) => {
         const result = await fetchViaInnerTube(videoId);
         if (result && result.tracks.length > 0) return res.json(result);
 
-        // 폴백: YouTube 페이지 파싱 (InnerTube 실패 시)
         const result2 = await fetchViaPageParse(videoId);
         if (result2) return res.json(result2);
 
@@ -32,71 +44,74 @@ app.get('/api/captions/:videoId', async (req, res) => {
 });
 
 /*
- * GET /api/subtitle?url=BASE_URL
- * → [{ start, dur, text }, ...]
+ * GET /api/subtitle/:videoId?lang=xx&kind=asr&name=xx
  *
- * 왜 서버에서 파싱하는가:
- *   InnerTube baseUrl은 기본적으로 srv3 형식(<p t="" d="">)을 반환하고,
- *   일부는 srv1 형식(<text start="" dur="">)이나 json3를 반환한다.
- *   서버에서 모든 형식을 파싱하고 통일된 JSON 배열로 반환하면
- *   클라이언트는 형식을 신경 쓸 필요 없이 렌더링만 하면 된다.
+ * 왜 baseUrl을 안 쓰고 직접 URL을 구성하는가:
+ *   InnerTube가 반환하는 baseUrl은 ip=0.0.0.0 + signature로 서명되어 있다.
+ *   이 서명은 InnerTube API 호출 시점의 컨텍스트에 묶여있어서,
+ *   서버가 별도로 이 URL을 요청하면 서명 불일치로 빈 응답(0바이트)이 온다.
+ *
+ *   대신 서버가 직접 timedtext URL을 구성하면,
+ *   YouTube는 서명 없이도 자막을 반환한다.
  */
-app.get('/api/subtitle', async (req, res) => {
-    const { url } = req.query;
-    if (!url) return res.status(400).json({ error: 'url 파라미터 필요' });
+app.get('/api/subtitle/:videoId', async (req, res) => {
+    const { videoId } = req.params;
+    const { lang, kind, name } = req.query;
 
     try {
-        console.log('\n===== 자막 요청 시작 =====');
-        console.log('원본 baseUrl:', url);
+        // 서버에서 직접 URL 구성 (서명 불필요)
+        const params = new URLSearchParams({ v: videoId, lang: lang || 'en' });
+        if (kind) params.set('kind', kind);
+        if (name) params.set('name', name);
 
-        // json3 형식을 요청
-        const json3Url = replaceUrlParam(url, 'fmt', 'json3');
-        console.log('\n[1단계] json3 URL:', json3Url);
-        const subtitles = await fetchAndParseJson3(json3Url);
-        console.log('[1단계] json3 파싱 결과:', subtitles.length, '개');
+        console.log(`\n===== 자막 요청: ${videoId} lang=${lang} kind=${kind || '없음'} =====`);
 
+        // 1순위: json3 형식 (구조화된 JSON)
+        params.set('fmt', 'json3');
+        const json3Url = `https://www.youtube.com/api/timedtext?${params}`;
+        console.log('[1] json3 요청:', json3Url);
+
+        let subtitles = await fetchAndParseJson3(json3Url);
         if (subtitles.length > 0) {
+            console.log(`[1] 성공: ${subtitles.length}개`);
             return res.json(subtitles);
         }
 
-        // json3 실패 시 원본 URL(srv3 XML)로 폴백
-        console.log('\n[2단계] XML 폴백 시도, URL:', url);
-        const fallbackSubs = await fetchAndParseXml(url);
-        console.log('[2단계] XML 파싱 결과:', fallbackSubs.length, '개');
-        res.json(fallbackSubs);
+        // 2순위: srv1 XML 형식
+        params.set('fmt', 'srv1');
+        const srv1Url = `https://www.youtube.com/api/timedtext?${params}`;
+        console.log('[2] srv1 요청:', srv1Url);
+
+        subtitles = await fetchAndParseXml(srv1Url);
+        if (subtitles.length > 0) {
+            console.log(`[2] 성공: ${subtitles.length}개`);
+            return res.json(subtitles);
+        }
+
+        // 3순위: 기본 형식 (fmt 파라미터 없이)
+        params.delete('fmt');
+        const defaultUrl = `https://www.youtube.com/api/timedtext?${params}`;
+        console.log('[3] 기본 요청:', defaultUrl);
+
+        subtitles = await fetchAndParseXml(defaultUrl);
+        console.log(`[3] 결과: ${subtitles.length}개`);
+        res.json(subtitles);
+
     } catch (err) {
         console.error('자막 내용 가져오기 실패:', err.message);
         res.status(500).json({ error: err.message });
     }
 });
 
-/*
- * json3 형식 파싱
- *
- * 왜 json3를 우선 사용하는가:
- *   YouTube의 json3 형식은 자막 데이터를 구조화된 JSON으로 제공한다.
- *   events[].segs[].utf8 에 텍스트가 있고,
- *   events[].tStartMs / dDurationMs 에 타이밍이 있다.
- *   XML 파싱보다 안정적이고, 줄바꿈/특수문자 처리가 쉽다.
- *
- * 왜 try/catch로 감싸는가:
- *   YouTube가 fmt=json3 요청에 대해 항상 JSON을 반환하지 않는다.
- *   HTML 에러 페이지, 빈 응답 등을 반환할 수 있으므로,
- *   파싱 실패 시 빈 배열을 반환하여 XML 폴백이 실행되게 한다.
- */
+/* ── json3 파싱 ── */
 async function fetchAndParseJson3(url) {
     try {
-        const resp = await fetch(url);
-        console.log('  json3 HTTP 상태:', resp.status);
+        const resp = await fetch(url, { headers: BROWSER_HEADERS });
         if (!resp.ok) return [];
 
         const raw = await resp.text();
-        console.log('  json3 응답 길이:', raw.length, '바이트');
-        console.log('  json3 응답 처음 500자:', raw.substring(0, 500));
-        if (!raw || !raw.trim().startsWith('{')) {
-            console.log('  json3 응답이 JSON이 아님, 건너뜀');
-            return [];
-        }
+        console.log(`  응답: ${raw.length}바이트`);
+        if (!raw || !raw.trim().startsWith('{')) return [];
 
         const data = JSON.parse(raw);
         if (!data.events) return [];
@@ -114,35 +129,22 @@ async function fetchAndParseJson3(url) {
         }
         return subtitles;
     } catch (err) {
-        // json3 파싱 실패는 치명적이지 않음 — XML 폴백으로 넘어감
-        console.log('json3 파싱 실패 (XML 폴백 시도):', err.message);
+        console.log('  json3 파싱 실패:', err.message);
         return [];
     }
 }
 
-/*
- * XML 형식 파싱 (srv1 <text> 및 srv3 <p> 모두 지원)
- *
- * json3 요청이 실패했을 때 사용되는 폴백.
- * srv1: <text start="초" dur="초">내용</text>
- * srv3: <p t="밀리초" d="밀리초">내용</p>
- *
- * 왜 try/catch로 감싸는가:
- *   네트워크 오류나 YouTube의 예상치 못한 응답 형식에 대해
- *   빈 배열을 반환하여 클라이언트에 "자막이 비어 있습니다" 표시.
- */
+/* ── XML 파싱 (srv1 <text> + srv3 <p>) ── */
 async function fetchAndParseXml(url) {
     try {
-        const resp = await fetch(url);
-        console.log('  XML HTTP 상태:', resp.status);
+        const resp = await fetch(url, { headers: BROWSER_HEADERS });
         if (!resp.ok) return [];
 
         const xml = await resp.text();
-        console.log('  XML 응답 길이:', xml.length, '바이트');
-        console.log('  XML 응답 처음 500자:', xml.substring(0, 500));
+        console.log(`  응답: ${xml.length}바이트, 처음 200자: ${xml.substring(0, 200)}`);
         const subtitles = [];
 
-        // srv1 형식: <text start="1.23" dur="4.56">
+        // srv1: <text start="초" dur="초">
         const textRegex = /<text[^>]*start="([^"]*)"[^>]*dur="([^"]*)"[^>]*>([\s\S]*?)<\/text>/g;
         let match;
         while ((match = textRegex.exec(xml)) !== null) {
@@ -157,7 +159,7 @@ async function fetchAndParseXml(url) {
         }
         if (subtitles.length > 0) return subtitles;
 
-        // srv3 형식: <p t="1230" d="4560">
+        // srv3: <p t="밀리초" d="밀리초">
         const pRegex = /<p[^>]*t="([^"]*)"[^>]*d="([^"]*)"[^>]*>([\s\S]*?)<\/p>/g;
         while ((match = pRegex.exec(xml)) !== null) {
             const text = decodeXmlEntities(match[3]).trim();
@@ -171,19 +173,12 @@ async function fetchAndParseXml(url) {
         }
         return subtitles;
     } catch (err) {
-        console.log('XML 파싱 실패:', err.message);
+        console.log('  XML 파싱 실패:', err.message);
         return [];
     }
 }
 
-/* URL의 쿼리 파라미터를 교체하는 헬퍼 */
-function replaceUrlParam(url, param, value) {
-    const u = new URL(url);
-    u.searchParams.set(param, value);
-    return u.toString();
-}
-
-/* XML 엔티티 디코딩 */
+/* ── 유틸리티 ── */
 function decodeXmlEntities(str) {
     return str
         .replace(/&amp;/g, '&')
@@ -191,14 +186,14 @@ function decodeXmlEntities(str) {
         .replace(/&gt;/g, '>')
         .replace(/&quot;/g, '"')
         .replace(/&#39;/g, "'")
-        .replace(/<[^>]*>/g, ''); // 인라인 태그 제거 (<font> 등)
+        .replace(/<[^>]*>/g, '');
 }
 
 /* ── InnerTube Player API ── */
 async function fetchViaInnerTube(videoId) {
     const resp = await fetch('https://www.youtube.com/youtubei/v1/player', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...BROWSER_HEADERS, 'Content-Type': 'application/json' },
         body: JSON.stringify({
             context: {
                 client: {
@@ -226,7 +221,6 @@ async function fetchViaInnerTube(videoId) {
             label: t.name?.simpleText || t.languageCode,
             languageCode: t.languageCode,
             kind: t.kind || '',
-            baseUrl: t.baseUrl,
         })),
     };
 }
@@ -234,12 +228,7 @@ async function fetchViaInnerTube(videoId) {
 /* ── YouTube 페이지 파싱 (폴백) ── */
 async function fetchViaPageParse(videoId) {
     const resp = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
-        headers: {
-            'User-Agent':
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-            'Accept-Language': 'ko,en;q=0.9',
-            Cookie: 'CONSENT=PENDING+987',
-        },
+        headers: BROWSER_HEADERS,
     });
 
     const html = await resp.text();
@@ -265,7 +254,6 @@ async function fetchViaPageParse(videoId) {
             label: t.name?.simpleText || t.languageCode,
             languageCode: t.languageCode,
             kind: t.kind || '',
-            baseUrl: t.baseUrl,
         }),
     );
 
