@@ -368,10 +368,14 @@
         let captionTracks = [];
         let currentVideoId = '';
 
-        const CORS_PROXIES = [
-            'https://corsproxy.io/?',
-            'https://api.allorigins.win/raw?url=',
-            'https://cors-anywhere.herokuapp.com/'
+        // Invidious public instances (CORS-friendly YouTube frontend API)
+        const INVIDIOUS_INSTANCES = [
+            'https://inv.nadeko.net',
+            'https://invidious.nerdvpn.de',
+            'https://invidious.jing.rocks',
+            'https://invidious.privacyredirect.com',
+            'https://invidious.protokolla.fi',
+            'https://iv.datura.network'
         ];
 
         function extractVideoId(url) {
@@ -396,18 +400,24 @@
             }
         }
 
-        async function fetchWithProxy(url) {
-            for (const proxy of CORS_PROXIES) {
+        // Try fetching from multiple Invidious instances with fallback
+        async function fetchFromInvidious(path) {
+            const errors = [];
+            for (const instance of INVIDIOUS_INSTANCES) {
                 try {
-                    const response = await fetch(proxy + encodeURIComponent(url));
+                    const response = await fetch(`${instance}${path}`, {
+                        signal: AbortSignal.timeout(8000)
+                    });
                     if (response.ok) {
-                        return await response.text();
+                        return { response, instance };
                     }
+                    errors.push(`${instance}: HTTP ${response.status}`);
                 } catch (e) {
+                    errors.push(`${instance}: ${e.message}`);
                     continue;
                 }
             }
-            throw new Error('모든 프록시 서버 요청이 실패했습니다.');
+            throw new Error('모든 서버에 연결할 수 없습니다. 잠시 후 다시 시도해주세요.');
         }
 
         async function handleExtract() {
@@ -429,80 +439,45 @@
             document.getElementById('resultSection').style.display = 'none';
             document.getElementById('languageSelect').style.display = 'none';
 
-            // Show video info
-            const videoInfo = document.getElementById('videoInfo');
+            // Show video info with thumbnail
             document.getElementById('thumbnail').src = `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
-            videoInfo.style.display = 'block';
+            document.getElementById('videoInfo').style.display = 'block';
+            document.getElementById('videoTitle').textContent = '';
 
-            setStatus('loading', '자막 정보를 가져오는 중...');
+            setStatus('loading', '영상 정보를 가져오는 중...');
 
             try {
-                // Fetch the YouTube video page to extract caption tracks
-                const pageHtml = await fetchWithProxy(`https://www.youtube.com/watch?v=${videoId}`);
+                // Step 1: Fetch video info + captions list from Invidious API
+                const { response: captionsResp, instance: workingInstance } =
+                    await fetchFromInvidious(`/api/v1/captions/${videoId}`);
+                const captionsData = await captionsResp.json();
 
-                // Extract caption tracks from the page
-                const captionRegex = /"captionTracks"\s*:\s*(\[.*?\])/;
-                let match = pageHtml.match(captionRegex);
-
-                if (!match) {
-                    // Try alternative pattern
-                    const altRegex = /captionTracks.*?(\[.*?\])/;
-                    match = pageHtml.match(altRegex);
-                    if (!match) {
-                        setStatus('error', '이 영상에는 자막이 없거나 자막을 가져올 수 없습니다.');
-                        document.getElementById('extractBtn').disabled = false;
-                        return;
-                    }
-                }
-
-                // Extract title
-                const titleMatch = pageHtml.match(/<title>(.*?)<\/title>/);
-                if (titleMatch) {
-                    let title = titleMatch[1].replace(' - YouTube', '').trim();
-                    title = decodeHtmlEntities(title);
-                    document.getElementById('videoTitle').textContent = title;
-                }
-
-                // Parse caption tracks
-                let tracksJson;
+                // Also fetch video title
                 try {
-                    const tracksStr = match[1];
-                    tracksJson = JSON.parse(tracksStr);
-                } catch (e) {
-                    // Try to extract more carefully using bracket matching
-                    const startIdx = pageHtml.indexOf('"captionTracks":');
-                    if (startIdx === -1) {
-                        setStatus('error', '자막 데이터를 파싱할 수 없습니다.');
-                        document.getElementById('extractBtn').disabled = false;
-                        return;
+                    const videoResp = await fetch(
+                        `${workingInstance}/api/v1/videos/${videoId}?fields=title`,
+                        { signal: AbortSignal.timeout(8000) }
+                    );
+                    if (videoResp.ok) {
+                        const videoData = await videoResp.json();
+                        document.getElementById('videoTitle').textContent = videoData.title || '';
                     }
-                    const bracketStart = pageHtml.indexOf('[', startIdx);
-                    let depth = 0;
-                    let bracketEnd = bracketStart;
-                    for (let i = bracketStart; i < pageHtml.length; i++) {
-                        if (pageHtml[i] === '[') depth++;
-                        if (pageHtml[i] === ']') depth--;
-                        if (depth === 0) {
-                            bracketEnd = i + 1;
-                            break;
-                        }
-                    }
-                    try {
-                        tracksJson = JSON.parse(pageHtml.substring(bracketStart, bracketEnd));
-                    } catch (e2) {
-                        setStatus('error', '자막 데이터를 파싱할 수 없습니다.');
-                        document.getElementById('extractBtn').disabled = false;
-                        return;
-                    }
+                } catch (_) {
+                    // Title fetch is non-critical, ignore errors
                 }
 
-                captionTracks = tracksJson;
-
-                if (!captionTracks || captionTracks.length === 0) {
-                    setStatus('error', '이 영상에는 사용 가능한 자막이 없습니다.');
+                if (!captionsData.captions || captionsData.captions.length === 0) {
+                    setStatus('error', '이 영상에는 자막이 없습니다.');
                     document.getElementById('extractBtn').disabled = false;
                     return;
                 }
+
+                // Store tracks with working instance info
+                captionTracks = captionsData.captions.map(track => ({
+                    label: track.label,
+                    languageCode: track.language_code,
+                    url: `${workingInstance}${track.url}`,
+                }));
 
                 // Populate language dropdown
                 const dropdown = document.getElementById('langDropdown');
@@ -510,15 +485,16 @@
                 captionTracks.forEach((track, idx) => {
                     const option = document.createElement('option');
                     option.value = idx;
-                    const kind = track.kind === 'asr' ? ' (자동 생성)' : '';
-                    option.textContent = `${track.name?.simpleText || track.languageCode}${kind}`;
+                    option.textContent = track.label;
                     dropdown.appendChild(option);
                 });
 
                 document.getElementById('languageSelect').style.display = 'block';
 
-                // Auto-select Korean if available, otherwise first track
-                const koreanIdx = captionTracks.findIndex(t => t.languageCode === 'ko');
+                // Auto-select Korean if available
+                const koreanIdx = captionTracks.findIndex(t =>
+                    t.languageCode === 'ko' || t.label.includes('한국어') || t.label.includes('Korean')
+                );
                 if (koreanIdx !== -1) {
                     dropdown.value = koreanIdx;
                 }
@@ -542,14 +518,15 @@
 
             try {
                 const track = captionTracks[trackIdx];
-                let subtitleUrl = track.baseUrl;
 
-                // Ensure URL uses the XML format
-                if (!subtitleUrl.includes('fmt=')) {
-                    subtitleUrl += '&fmt=srv3';
+                const response = await fetch(track.url, {
+                    signal: AbortSignal.timeout(10000)
+                });
+                if (!response.ok) {
+                    throw new Error(`자막 요청 실패 (HTTP ${response.status})`);
                 }
 
-                const xmlText = await fetchWithProxy(subtitleUrl);
+                const xmlText = await response.text();
                 currentSubtitles = parseSubtitleXml(xmlText);
 
                 if (currentSubtitles.length === 0) {
@@ -569,15 +546,30 @@
         function parseSubtitleXml(xml) {
             const parser = new DOMParser();
             const doc = parser.parseFromString(xml, 'text/xml');
-            const textElements = doc.querySelectorAll('text, p');
             const subtitles = [];
 
-            textElements.forEach(el => {
-                const start = parseFloat(el.getAttribute('start') || el.getAttribute('t') || '0') / (el.getAttribute('t') ? 1000 : 1);
-                const dur = parseFloat(el.getAttribute('dur') || el.getAttribute('d') || '0') / (el.getAttribute('d') ? 1000 : 1);
+            // Handle standard YouTube XML format (<text start="" dur="">)
+            const textElements = doc.querySelectorAll('text');
+            if (textElements.length > 0) {
+                textElements.forEach(el => {
+                    const start = parseFloat(el.getAttribute('start') || '0');
+                    const dur = parseFloat(el.getAttribute('dur') || '0');
+                    let text = el.textContent || '';
+                    text = decodeHtmlEntities(text).trim();
+                    if (text) {
+                        subtitles.push({ start, dur, text });
+                    }
+                });
+                return subtitles;
+            }
+
+            // Handle srv3 format (<p t="" d="">)
+            const pElements = doc.querySelectorAll('p');
+            pElements.forEach(el => {
+                const start = parseFloat(el.getAttribute('t') || '0') / 1000;
+                const dur = parseFloat(el.getAttribute('d') || '0') / 1000;
                 let text = el.textContent || '';
                 text = decodeHtmlEntities(text).trim();
-
                 if (text) {
                     subtitles.push({ start, dur, text });
                 }
