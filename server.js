@@ -1,6 +1,7 @@
 import express from 'express';
-import pkg from 'youtube-transcript';
-const { YoutubeTranscript } = pkg;
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const { YoutubeTranscript } = require('youtube-transcript');
 const app = express();
 const PORT = 3000;
 
