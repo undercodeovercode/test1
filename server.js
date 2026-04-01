@@ -1,5 +1,6 @@
 import express from 'express';
-import { YoutubeTranscript } from 'youtube-transcript';
+import pkg from 'youtube-transcript';
+const { YoutubeTranscript } = pkg;
 const app = express();
 const PORT = 3000;
 
