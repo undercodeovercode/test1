@@ -46,16 +46,23 @@ app.get('/api/subtitle', async (req, res) => {
     if (!url) return res.status(400).json({ error: 'url 파라미터 필요' });
 
     try {
-        // json3 형식을 요청 — 가장 파싱하기 쉽고 정보가 풍부한 형식
+        console.log('\n===== 자막 요청 시작 =====');
+        console.log('원본 baseUrl:', url);
+
+        // json3 형식을 요청
         const json3Url = replaceUrlParam(url, 'fmt', 'json3');
+        console.log('\n[1단계] json3 URL:', json3Url);
         const subtitles = await fetchAndParseJson3(json3Url);
+        console.log('[1단계] json3 파싱 결과:', subtitles.length, '개');
 
         if (subtitles.length > 0) {
             return res.json(subtitles);
         }
 
         // json3 실패 시 원본 URL(srv3 XML)로 폴백
+        console.log('\n[2단계] XML 폴백 시도, URL:', url);
         const fallbackSubs = await fetchAndParseXml(url);
+        console.log('[2단계] XML 파싱 결과:', fallbackSubs.length, '개');
         res.json(fallbackSubs);
     } catch (err) {
         console.error('자막 내용 가져오기 실패:', err.message);
@@ -80,14 +87,16 @@ app.get('/api/subtitle', async (req, res) => {
 async function fetchAndParseJson3(url) {
     try {
         const resp = await fetch(url);
+        console.log('  json3 HTTP 상태:', resp.status);
         if (!resp.ok) return [];
 
-        // resp.json() 대신 text → JSON.parse 사용:
-        // YouTube가 JSON이 아닌 응답(HTML 등)을 보내면
-        // resp.json()은 스트림을 소비한 뒤 실패하므로 디버깅이 어렵다.
-        // text로 먼저 받으면 로그 확인도 가능하고 안전하다.
         const raw = await resp.text();
-        if (!raw || !raw.trim().startsWith('{')) return [];
+        console.log('  json3 응답 길이:', raw.length, '바이트');
+        console.log('  json3 응답 처음 500자:', raw.substring(0, 500));
+        if (!raw || !raw.trim().startsWith('{')) {
+            console.log('  json3 응답이 JSON이 아님, 건너뜀');
+            return [];
+        }
 
         const data = JSON.parse(raw);
         if (!data.events) return [];
@@ -125,9 +134,12 @@ async function fetchAndParseJson3(url) {
 async function fetchAndParseXml(url) {
     try {
         const resp = await fetch(url);
+        console.log('  XML HTTP 상태:', resp.status);
         if (!resp.ok) return [];
 
         const xml = await resp.text();
+        console.log('  XML 응답 길이:', xml.length, '바이트');
+        console.log('  XML 응답 처음 500자:', xml.substring(0, 500));
         const subtitles = [];
 
         // srv1 형식: <text start="1.23" dur="4.56">
