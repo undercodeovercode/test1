@@ -3,15 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-    <meta http-equiv="Pragma" content="no-cache">
     <title>유튜브 자막 추출기</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
 
         body {
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
@@ -20,301 +14,108 @@
             min-height: 100vh;
         }
 
-        .container {
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 40px 20px;
-        }
+        .container { max-width: 800px; margin: 0 auto; padding: 40px 20px; }
 
-        header {
-            text-align: center;
-            margin-bottom: 40px;
-        }
+        header { text-align: center; margin-bottom: 40px; }
 
         header h1 {
-            font-size: 32px;
-            font-weight: 700;
-            margin-bottom: 8px;
+            font-size: 32px; font-weight: 700; margin-bottom: 8px;
             background: linear-gradient(135deg, #ff0000, #ff4444);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
             background-clip: text;
         }
 
-        header p {
-            color: #aaa;
-            font-size: 16px;
-        }
+        header p { color: #aaa; font-size: 16px; }
 
-        .input-section {
-            display: flex;
-            gap: 12px;
-            margin-bottom: 24px;
-        }
+        .input-section { display: flex; gap: 12px; margin-bottom: 24px; }
 
         .input-section input {
-            flex: 1;
-            padding: 14px 18px;
-            border: 2px solid #333;
-            border-radius: 12px;
-            background-color: #1a1a1a;
-            color: #f1f1f1;
-            font-size: 16px;
-            outline: none;
-            transition: border-color 0.2s;
+            flex: 1; padding: 14px 18px; border: 2px solid #333;
+            border-radius: 12px; background-color: #1a1a1a; color: #f1f1f1;
+            font-size: 16px; outline: none; transition: border-color 0.2s;
         }
-
-        .input-section input:focus {
-            border-color: #ff4444;
-        }
-
-        .input-section input::placeholder {
-            color: #666;
-        }
+        .input-section input:focus { border-color: #ff4444; }
+        .input-section input::placeholder { color: #666; }
 
         .btn-extract {
             padding: 14px 28px;
             background: linear-gradient(135deg, #ff0000, #cc0000);
-            color: white;
-            border: none;
-            border-radius: 12px;
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: transform 0.1s, opacity 0.2s;
-            white-space: nowrap;
+            color: white; border: none; border-radius: 12px;
+            font-size: 16px; font-weight: 600; cursor: pointer;
+            transition: transform 0.1s, opacity 0.2s; white-space: nowrap;
         }
+        .btn-extract:hover { opacity: 0.9; }
+        .btn-extract:active { transform: scale(0.97); }
+        .btn-extract:disabled { opacity: 0.5; cursor: not-allowed; }
 
-        .btn-extract:hover {
-            opacity: 0.9;
-        }
-
-        .btn-extract:active {
-            transform: scale(0.97);
-        }
-
-        .btn-extract:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        .language-select {
-            margin-bottom: 24px;
-            display: none;
-        }
-
-        .language-select label {
-            display: block;
-            margin-bottom: 8px;
-            color: #aaa;
-            font-size: 14px;
-        }
-
+        .language-select { margin-bottom: 24px; display: none; }
+        .language-select label { display: block; margin-bottom: 8px; color: #aaa; font-size: 14px; }
         .language-select select {
-            width: 100%;
-            padding: 12px 16px;
-            border: 2px solid #333;
-            border-radius: 12px;
-            background-color: #1a1a1a;
-            color: #f1f1f1;
-            font-size: 15px;
-            outline: none;
-            cursor: pointer;
+            width: 100%; padding: 12px 16px; border: 2px solid #333;
+            border-radius: 12px; background-color: #1a1a1a; color: #f1f1f1;
+            font-size: 15px; outline: none; cursor: pointer;
         }
-
-        .language-select select:focus {
-            border-color: #ff4444;
-        }
+        .language-select select:focus { border-color: #ff4444; }
 
         .status {
-            text-align: center;
-            padding: 16px;
-            margin-bottom: 24px;
-            border-radius: 12px;
-            display: none;
-            font-size: 15px;
-            line-height: 1.5;
+            text-align: center; padding: 16px; margin-bottom: 24px;
+            border-radius: 12px; display: none; font-size: 15px; line-height: 1.5;
         }
-
-        .status.loading {
-            display: block;
-            background-color: #1a1a2e;
-            color: #7aa2f7;
-            border: 1px solid #2a2a4e;
-        }
-
-        .status.error {
-            display: block;
-            background-color: #2e1a1a;
-            color: #f77a7a;
-            border: 1px solid #4e2a2a;
-        }
-
-        .status.success {
-            display: block;
-            background-color: #1a2e1a;
-            color: #7af77a;
-            border: 1px solid #2a4e2a;
-        }
+        .status.loading { display: block; background-color: #1a1a2e; color: #7aa2f7; border: 1px solid #2a2a4e; }
+        .status.error   { display: block; background-color: #2e1a1a; color: #f77a7a; border: 1px solid #4e2a2a; }
+        .status.success  { display: block; background-color: #1a2e1a; color: #7af77a; border: 1px solid #2a4e2a; }
 
         .video-info {
-            display: none;
-            background-color: #1a1a1a;
-            border-radius: 12px;
-            padding: 20px;
-            margin-bottom: 24px;
-            border: 1px solid #333;
+            display: none; background-color: #1a1a1a; border-radius: 12px;
+            padding: 20px; margin-bottom: 24px; border: 1px solid #333;
         }
+        .video-info .thumbnail { width: 100%; border-radius: 8px; margin-bottom: 12px; }
+        .video-info .title { font-size: 18px; font-weight: 600; color: #f1f1f1; }
 
-        .video-info .thumbnail {
-            width: 100%;
-            border-radius: 8px;
-            margin-bottom: 12px;
-        }
-
-        .video-info .title {
-            font-size: 18px;
-            font-weight: 600;
-            color: #f1f1f1;
-        }
-
-        .result-section {
-            display: none;
-        }
-
-        .result-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 16px;
-        }
-
-        .result-header h2 {
-            font-size: 20px;
-            font-weight: 600;
-        }
-
-        .result-actions {
-            display: flex;
-            gap: 8px;
-        }
+        .result-section { display: none; }
+        .result-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+        .result-header h2 { font-size: 20px; font-weight: 600; }
+        .result-actions { display: flex; gap: 8px; }
 
         .btn-copy, .btn-download {
-            padding: 10px 20px;
-            border: 1px solid #444;
-            border-radius: 8px;
-            background-color: #2a2a2a;
-            color: #f1f1f1;
-            font-size: 14px;
-            cursor: pointer;
-            transition: background-color 0.2s;
+            padding: 10px 20px; border: 1px solid #444; border-radius: 8px;
+            background-color: #2a2a2a; color: #f1f1f1; font-size: 14px;
+            cursor: pointer; transition: background-color 0.2s;
         }
+        .btn-copy:hover, .btn-download:hover { background-color: #3a3a3a; }
+        .btn-copy.copied { background-color: #1a4a1a; border-color: #2a6a2a; color: #7af77a; }
 
-        .btn-copy:hover, .btn-download:hover {
-            background-color: #3a3a3a;
-        }
-
-        .btn-copy.copied {
-            background-color: #1a4a1a;
-            border-color: #2a6a2a;
-            color: #7af77a;
-        }
-
-        .subtitle-options {
-            display: flex;
-            gap: 12px;
-            margin-bottom: 16px;
-        }
-
-        .subtitle-options label {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            color: #aaa;
-            font-size: 14px;
-            cursor: pointer;
-        }
-
-        .subtitle-options input[type="checkbox"] {
-            accent-color: #ff4444;
-        }
+        .subtitle-options { display: flex; gap: 12px; margin-bottom: 16px; }
+        .subtitle-options label { display: flex; align-items: center; gap: 6px; color: #aaa; font-size: 14px; cursor: pointer; }
+        .subtitle-options input[type="checkbox"] { accent-color: #ff4444; }
 
         .subtitle-box {
-            background-color: #1a1a1a;
-            border: 1px solid #333;
-            border-radius: 12px;
-            padding: 24px;
-            max-height: 500px;
-            overflow-y: auto;
-            line-height: 1.8;
-            font-size: 15px;
-            color: #ddd;
-            white-space: pre-wrap;
-            word-break: break-word;
+            background-color: #1a1a1a; border: 1px solid #333; border-radius: 12px;
+            padding: 24px; max-height: 500px; overflow-y: auto;
+            line-height: 1.8; font-size: 15px; color: #ddd;
+            white-space: pre-wrap; word-break: break-word;
         }
+        .subtitle-box::-webkit-scrollbar { width: 8px; }
+        .subtitle-box::-webkit-scrollbar-track { background: #1a1a1a; border-radius: 4px; }
+        .subtitle-box::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
 
-        .subtitle-box::-webkit-scrollbar {
-            width: 8px;
-        }
-
-        .subtitle-box::-webkit-scrollbar-track {
-            background: #1a1a1a;
-            border-radius: 4px;
-        }
-
-        .subtitle-box::-webkit-scrollbar-thumb {
-            background: #444;
-            border-radius: 4px;
-        }
-
-        .subtitle-line {
-            padding: 4px 0;
-        }
-
-        .subtitle-line .timestamp {
-            color: #ff6666;
-            font-size: 13px;
-            margin-right: 8px;
-            font-family: monospace;
-        }
+        .subtitle-line { padding: 4px 0; }
+        .subtitle-line .timestamp { color: #ff6666; font-size: 13px; margin-right: 8px; font-family: monospace; }
 
         .spinner {
-            display: inline-block;
-            width: 16px;
-            height: 16px;
-            border: 2px solid #7aa2f7;
-            border-top-color: transparent;
-            border-radius: 50%;
-            animation: spin 0.8s linear infinite;
-            vertical-align: middle;
-            margin-right: 8px;
+            display: inline-block; width: 16px; height: 16px;
+            border: 2px solid #7aa2f7; border-top-color: transparent;
+            border-radius: 50%; animation: spin 0.8s linear infinite;
+            vertical-align: middle; margin-right: 8px;
         }
+        @keyframes spin { to { transform: rotate(360deg); } }
 
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-
-        footer {
-            text-align: center;
-            margin-top: 48px;
-            color: #555;
-            font-size: 13px;
-        }
+        footer { text-align: center; margin-top: 48px; color: #555; font-size: 13px; }
 
         @media (max-width: 600px) {
-            .input-section {
-                flex-direction: column;
-            }
-
-            .result-header {
-                flex-direction: column;
-                gap: 12px;
-                align-items: flex-start;
-            }
-
-            header h1 {
-                font-size: 24px;
-            }
+            .input-section { flex-direction: column; }
+            .result-header { flex-direction: column; gap: 12px; align-items: flex-start; }
+            header h1 { font-size: 24px; }
         }
     </style>
 </head>
@@ -350,14 +151,12 @@
                     <button class="btn-download" onclick="downloadSubtitles()">다운로드</button>
                 </div>
             </div>
-
             <div class="subtitle-options">
                 <label>
                     <input type="checkbox" id="showTimestamp" onchange="renderSubtitles()" />
                     타임스탬프 표시
                 </label>
             </div>
-
             <div class="subtitle-box" id="subtitleBox"></div>
         </div>
 
@@ -367,199 +166,38 @@
     </div>
 
     <script>
-        /* ── 상태 ── */
         let currentSubtitles = [];
         let captionTracks = [];
         let currentVideoId = '';
-        let activeMethod = '';
 
-        /* ── CORS 프록시 목록 (YouTube timedtext API 호출용) ── */
-        const CORS_PROXIES = [
-            url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
-            url => `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
-            url => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
-            url => `https://corsproxy.org/?url=${encodeURIComponent(url)}`,
-        ];
-
-        /* ── Invidious 인스턴스 (직접 API) ── */
-        const INVIDIOUS = [
-            'https://inv.nadeko.net',
-            'https://yewtu.be',
-            'https://vid.puffyan.us',
-            'https://invidious.lunar.icu',
-            'https://invidious.privacyredirect.com',
-            'https://iv.nbofc.de',
-            'https://invidious.protokolla.fi',
-            'https://iv.datura.network',
-            'https://invidious.perennialte.ch',
-            'https://yt.artemislena.eu',
-            'https://invidious.nerdvpn.de',
-            'https://invidious.jing.rocks',
-        ];
-
-        /* ── Piped 인스턴스 (직접 API) ── */
-        const PIPED = [
-            'https://pipedapi.kavin.rocks',
-            'https://pipedapi.r4fo.com',
-            'https://pipedapi.adminforge.de',
-            'https://api.piped.projectsegfau.lt',
-            'https://pipedapi.in.projectsegfau.lt',
-            'https://pipedapi.leptons.xyz',
-        ];
-
-        /* ── 유틸리티 ── */
         function extractVideoId(url) {
-            const patterns = [
-                /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/v\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/,
-                /^([a-zA-Z0-9_-]{11})$/,
-            ];
-            for (const p of patterns) {
-                const m = url.match(p);
-                if (m) return m[1];
-            }
-            return null;
+            const m = url.match(
+                /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/v\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/
+            );
+            return m ? m[1] : null;
         }
 
-        function setStatus(type, message) {
+        function setStatus(type, msg) {
             const el = document.getElementById('status');
             el.className = 'status ' + type;
-            if (type === 'loading') {
-                el.innerHTML = '<span class="spinner"></span>' + escapeHtml(message);
-            } else {
-                el.textContent = message;
-            }
+            el.innerHTML = type === 'loading'
+                ? '<span class="spinner"></span>' + escapeHtml(msg)
+                : escapeHtml(msg);
         }
 
-        function fetchT(url, ms = 8000) {
-            const c = new AbortController();
-            const t = setTimeout(() => c.abort(), ms);
-            return fetch(url, { signal: c.signal }).finally(() => clearTimeout(t));
-        }
-
-        function decodeHtmlEntities(str) {
-            const t = document.createElement('textarea');
-            t.innerHTML = str;
-            return t.value;
-        }
-
-        function escapeHtml(str) {
+        function escapeHtml(s) {
             const d = document.createElement('div');
-            d.textContent = str;
+            d.textContent = s;
             return d.innerHTML;
         }
 
-        /* ══════════════════════════════════════════
-           방법 1: YouTube timedtext API + CORS 프록시
-           작은 XML만 가져오므로 가볍고 빠름
-           ══════════════════════════════════════════ */
-        async function fetchViaTimedText(videoId) {
-            const listUrl = `https://video.google.com/timedtext?type=list&v=${videoId}`;
-
-            for (const makeProxy of CORS_PROXIES) {
-                try {
-                    const resp = await fetchT(makeProxy(listUrl), 10000);
-                    if (!resp.ok) continue;
-                    const xml = await resp.text();
-                    const parser = new DOMParser();
-                    const doc = parser.parseFromString(xml, 'text/xml');
-                    const tracks = doc.querySelectorAll('track');
-                    if (tracks.length === 0) continue;
-
-                    const workingProxy = makeProxy;
-                    const result = [];
-                    tracks.forEach(tr => {
-                        const lang = tr.getAttribute('lang_code');
-                        const name = tr.getAttribute('name') || '';
-                        const label = tr.getAttribute('lang_translated') || lang;
-                        const subUrl = `https://video.google.com/timedtext?lang=${lang}&v=${videoId}&name=${encodeURIComponent(name)}`;
-                        result.push({
-                            label,
-                            languageCode: lang,
-                            fetchUrl: workingProxy(subUrl),
-                        });
-                    });
-                    if (result.length > 0) {
-                        activeMethod = 'timedtext';
-                        return result;
-                    }
-                } catch (_) {
-                    continue;
-                }
-            }
-            return null;
+        function decodeEntities(s) {
+            const t = document.createElement('textarea');
+            t.innerHTML = s;
+            return t.value;
         }
 
-        /* ══════════════════════════════════════════
-           방법 2: Invidious API (CORS 지원)
-           ══════════════════════════════════════════ */
-        function tryInvidious(inst, videoId) {
-            return fetchT(`${inst}/api/v1/captions/${videoId}`)
-                .then(async r => {
-                    if (!r.ok) throw new Error('HTTP ' + r.status);
-                    const d = await r.json();
-                    if (!d.captions?.length) throw new Error('empty');
-                    return d.captions.map(t => ({
-                        label: t.label,
-                        languageCode: t.language_code,
-                        fetchUrl: `${inst}${t.url}`,
-                    }));
-                });
-        }
-
-        /* ══════════════════════════════════════════
-           방법 3: Piped API (CORS 지원)
-           ══════════════════════════════════════════ */
-        function tryPiped(inst, videoId) {
-            return fetchT(`${inst}/streams/${videoId}`)
-                .then(async r => {
-                    if (!r.ok) throw new Error('HTTP ' + r.status);
-                    const d = await r.json();
-                    if (!d.subtitles?.length) throw new Error('empty');
-                    // Piped title 저장
-                    if (d.title) {
-                        document.getElementById('videoTitle').textContent = d.title;
-                    }
-                    return d.subtitles.map(t => ({
-                        label: t.name || t.code,
-                        languageCode: t.code,
-                        fetchUrl: t.url,
-                        autoGenerated: t.autoGenerated,
-                    }));
-                });
-        }
-
-        /* ══════════════════════════════════════════
-           모든 방법 병렬 시도
-           ══════════════════════════════════════════ */
-        async function fetchCaptions(videoId) {
-            // 방법 1 (timedtext)은 순차 프록시 시도이므로 별도 promise
-            const timedTextPromise = fetchViaTimedText(videoId).then(r => {
-                if (!r) throw new Error('timedtext failed');
-                return r;
-            });
-
-            // 방법 2+3 (Invidious + Piped)은 모든 인스턴스 동시
-            const instancePromises = [
-                ...INVIDIOUS.map(inst => tryInvidious(inst, videoId)),
-                ...PIPED.map(inst => tryPiped(inst, videoId)),
-            ];
-
-            // Promise.any: 하나라도 성공하면 즉시 반환
-            try {
-                const result = await Promise.any([timedTextPromise, ...instancePromises]);
-                return result;
-            } catch (err) {
-                throw new Error(
-                    '자막을 가져올 수 없습니다.\n' +
-                    '1) 영상에 자막이 없을 수 있습니다.\n' +
-                    '2) 네트워크 문제일 수 있습니다. 잠시 후 다시 시도해주세요.'
-                );
-            }
-        }
-
-        /* ══════════════════════════════════════════
-           메인 핸들러
-           ══════════════════════════════════════════ */
+        /* ── 메인 ── */
         async function handleExtract() {
             const url = document.getElementById('urlInput').value.trim();
             if (!url) { setStatus('error', '유튜브 링크를 입력해주세요.'); return; }
@@ -572,85 +210,66 @@
             document.getElementById('resultSection').style.display = 'none';
             document.getElementById('languageSelect').style.display = 'none';
 
-            // 썸네일 표시
-            document.getElementById('thumbnail').src =
-                `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
+            document.getElementById('thumbnail').src = `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
             document.getElementById('videoInfo').style.display = 'block';
             document.getElementById('videoTitle').textContent = '';
 
-            setStatus('loading', '자막을 가져오는 중... (여러 경로로 동시 시도)');
+            setStatus('loading', '자막 정보를 가져오는 중...');
 
             try {
-                captionTracks = await fetchCaptions(videoId);
+                const resp = await fetch(`/api/captions/${videoId}`);
+                const data = await resp.json();
 
-                // 제목 가져오기 (oEmbed, CORS 지원)
-                if (!document.getElementById('videoTitle').textContent) {
-                    fetchVideoTitle(videoId);
+                if (!resp.ok) throw new Error(data.error || '서버 오류');
+
+                if (data.title) {
+                    document.getElementById('videoTitle').textContent = decodeEntities(data.title);
                 }
 
-                // 드롭다운 채우기
+                if (!data.tracks || data.tracks.length === 0) {
+                    setStatus('error', '이 영상에는 자막이 없습니다.');
+                    document.getElementById('extractBtn').disabled = false;
+                    return;
+                }
+
+                captionTracks = data.tracks;
+
+                // 드롭다운
                 const dd = document.getElementById('langDropdown');
                 dd.innerHTML = '';
                 captionTracks.forEach((t, i) => {
                     const opt = document.createElement('option');
                     opt.value = i;
-                    const auto = t.autoGenerated ? ' (자동 생성)' : '';
+                    const auto = t.kind === 'asr' ? ' (자동 생성)' : '';
                     opt.textContent = t.label + auto;
                     dd.appendChild(opt);
                 });
                 document.getElementById('languageSelect').style.display = 'block';
 
                 // 한국어 자동 선택
-                const ki = captionTracks.findIndex(t =>
-                    t.languageCode === 'ko' ||
-                    t.label.includes('한국어') ||
-                    t.label.includes('Korean')
-                );
+                const ki = captionTracks.findIndex(t => t.languageCode === 'ko');
                 if (ki !== -1) dd.value = ki;
 
                 await loadSubtitles(dd.value);
-
             } catch (err) {
-                setStatus('error', err.message);
+                setStatus('error', '오류: ' + err.message);
             }
 
             document.getElementById('extractBtn').disabled = false;
-        }
-
-        async function fetchVideoTitle(videoId) {
-            try {
-                const r = await fetchT(
-                    `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`
-                );
-                if (r.ok) {
-                    const d = await r.json();
-                    document.getElementById('videoTitle').textContent = d.title || '';
-                }
-            } catch (_) {}
         }
 
         async function handleLanguageChange() {
             await loadSubtitles(document.getElementById('langDropdown').value);
         }
 
-        async function loadSubtitles(trackIdx) {
+        async function loadSubtitles(idx) {
             setStatus('loading', '자막 내용을 불러오는 중...');
-
             try {
-                const track = captionTracks[trackIdx];
-                const resp = await fetchT(track.fetchUrl, 10000);
-                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                const track = captionTracks[idx];
+                const resp = await fetch(`/api/subtitle?url=${encodeURIComponent(track.baseUrl)}`);
+                const xml = await resp.text();
 
-                const text = await resp.text();
-
-                // Piped는 JSON(VTT 형태), 나머지는 XML
-                if (text.trim().startsWith('{') || text.trim().startsWith('[')) {
-                    currentSubtitles = parseSubtitleJson(text);
-                } else if (text.trim().startsWith('WEBVTT')) {
-                    currentSubtitles = parseVTT(text);
-                } else {
-                    currentSubtitles = parseSubtitleXml(text);
-                }
+                currentSubtitles = parseXml(xml);
 
                 if (currentSubtitles.length === 0) {
                     setStatus('error', '자막이 비어 있습니다.');
@@ -660,104 +279,34 @@
                 setStatus('success', `자막 ${currentSubtitles.length}개 항목을 추출했습니다.`);
                 renderSubtitles();
                 document.getElementById('resultSection').style.display = 'block';
-
             } catch (err) {
-                setStatus('error', `자막을 불러오는 데 실패했습니다: ${err.message}`);
+                setStatus('error', '자막 로드 실패: ' + err.message);
             }
         }
 
-        /* ── 파서들 ── */
-        function parseSubtitleXml(xml) {
+        function parseXml(xml) {
             const doc = new DOMParser().parseFromString(xml, 'text/xml');
             const subs = [];
-
-            // <text start="" dur="">
-            const texts = doc.querySelectorAll('text');
-            if (texts.length > 0) {
-                texts.forEach(el => {
-                    const start = parseFloat(el.getAttribute('start') || '0');
-                    const dur = parseFloat(el.getAttribute('dur') || '0');
-                    const t = decodeHtmlEntities(el.textContent || '').trim();
-                    if (t) subs.push({ start, dur, text: t });
-                });
-                return subs;
-            }
-
-            // <p t="" d="">  (srv3)
-            doc.querySelectorAll('p').forEach(el => {
-                const start = parseFloat(el.getAttribute('t') || '0') / 1000;
-                const dur = parseFloat(el.getAttribute('d') || '0') / 1000;
-                const t = decodeHtmlEntities(el.textContent || '').trim();
-                if (t) subs.push({ start, dur, text: t });
+            doc.querySelectorAll('text').forEach(el => {
+                const start = parseFloat(el.getAttribute('start') || '0');
+                const dur = parseFloat(el.getAttribute('dur') || '0');
+                const text = decodeEntities(el.textContent || '').trim();
+                if (text) subs.push({ start, dur, text });
             });
             return subs;
         }
 
-        function parseVTT(vtt) {
-            const subs = [];
-            const blocks = vtt.split(/\n\n+/);
-            for (const block of blocks) {
-                const lines = block.trim().split('\n');
-                for (let i = 0; i < lines.length; i++) {
-                    const m = lines[i].match(
-                        /(\d{2}):(\d{2}):(\d{2})\.(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})\.(\d{3})/
-                    );
-                    if (!m) {
-                        // Also try MM:SS.mmm format
-                        const m2 = lines[i].match(
-                            /(\d{2}):(\d{2})\.(\d{3})\s*-->\s*(\d{2}):(\d{2})\.(\d{3})/
-                        );
-                        if (m2) {
-                            const start = parseInt(m2[1]) * 60 + parseInt(m2[2]) + parseInt(m2[3]) / 1000;
-                            const end = parseInt(m2[4]) * 60 + parseInt(m2[5]) + parseInt(m2[6]) / 1000;
-                            const text = lines.slice(i + 1).join(' ')
-                                .replace(/<[^>]*>/g, '').trim();
-                            if (text) subs.push({ start, dur: end - start, text });
-                            break;
-                        }
-                        continue;
-                    }
-                    const start = parseInt(m[1]) * 3600 + parseInt(m[2]) * 60 +
-                                  parseInt(m[3]) + parseInt(m[4]) / 1000;
-                    const end = parseInt(m[5]) * 3600 + parseInt(m[6]) * 60 +
-                                parseInt(m[7]) + parseInt(m[8]) / 1000;
-                    const text = lines.slice(i + 1).join(' ')
-                        .replace(/<[^>]*>/g, '').trim();
-                    if (text) subs.push({ start, dur: end - start, text });
-                    break;
-                }
-            }
-            return subs;
-        }
-
-        function parseSubtitleJson(jsonStr) {
-            try {
-                const data = JSON.parse(jsonStr);
-                const segs = Array.isArray(data) ? data : (data.segments || data.body || []);
-                return segs
-                    .map(s => ({
-                        start: (s.startMs != null ? s.startMs / 1000 : s.start) || 0,
-                        dur: (s.durationMs != null ? s.durationMs / 1000 : s.dur) || 0,
-                        text: (s.text || s.utf8 || '').trim(),
-                    }))
-                    .filter(s => s.text);
-            } catch (_) { return []; }
-        }
-
-        /* ── 표시/복사/다운로드 ── */
+        /* ── 표시 ── */
         function formatTime(sec) {
-            const h = Math.floor(sec / 3600);
-            const m = Math.floor((sec % 3600) / 60);
-            const s = Math.floor(sec % 60);
+            const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = Math.floor(sec % 60);
             return h > 0
-                ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
-                : `${m}:${String(s).padStart(2, '0')}`;
+                ? `${h}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
+                : `${m}:${String(s).padStart(2,'0')}`;
         }
 
         function renderSubtitles() {
             const box = document.getElementById('subtitleBox');
             const ts = document.getElementById('showTimestamp').checked;
-
             if (ts) {
                 box.innerHTML = currentSubtitles.map(s =>
                     `<div class="subtitle-line"><span class="timestamp">[${formatTime(s.start)}]</span>${escapeHtml(s.text)}</div>`
@@ -770,42 +319,28 @@
 
         function getPlainText() {
             const ts = document.getElementById('showTimestamp').checked;
-            return currentSubtitles.map(s =>
-                ts ? `[${formatTime(s.start)}] ${s.text}` : s.text
-            ).join('\n');
+            return currentSubtitles.map(s => ts ? `[${formatTime(s.start)}] ${s.text}` : s.text).join('\n');
         }
 
         async function copySubtitles() {
-            const text = getPlainText();
-            const btn = document.getElementById('copyBtn');
-            try {
-                await navigator.clipboard.writeText(text);
-            } catch (_) {
+            const text = getPlainText(), btn = document.getElementById('copyBtn');
+            try { await navigator.clipboard.writeText(text); }
+            catch (_) {
                 const ta = document.createElement('textarea');
-                ta.value = text;
-                ta.style.cssText = 'position:fixed;opacity:0';
-                document.body.appendChild(ta);
-                ta.select();
-                document.execCommand('copy');
-                document.body.removeChild(ta);
+                ta.value = text; ta.style.cssText = 'position:fixed;opacity:0';
+                document.body.appendChild(ta); ta.select();
+                document.execCommand('copy'); document.body.removeChild(ta);
             }
-            btn.textContent = '복사 완료!';
-            btn.classList.add('copied');
-            setTimeout(() => {
-                btn.textContent = '복사하기';
-                btn.classList.remove('copied');
-            }, 2000);
+            btn.textContent = '복사 완료!'; btn.classList.add('copied');
+            setTimeout(() => { btn.textContent = '복사하기'; btn.classList.remove('copied'); }, 2000);
         }
 
         function downloadSubtitles() {
-            const blob = new Blob([getPlainText()], { type: 'text/plain;charset=utf-8' });
             const a = document.createElement('a');
-            a.href = URL.createObjectURL(blob);
+            a.href = URL.createObjectURL(new Blob([getPlainText()], { type: 'text/plain;charset=utf-8' }));
             a.download = `subtitle_${currentVideoId}.txt`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(a.href);
+            document.body.appendChild(a); a.click();
+            document.body.removeChild(a); URL.revokeObjectURL(a.href);
         }
 
         document.getElementById('urlInput').addEventListener('keydown', e => {

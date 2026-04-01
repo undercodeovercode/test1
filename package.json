@@ -1,0 +1,12 @@
+{
+  "name": "youtube-subtitle-extractor",
+  "version": "1.0.0",
+  "description": "유튜브 자막 추출기",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.21.0"
+  }
+}
