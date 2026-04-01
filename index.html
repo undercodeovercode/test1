@@ -266,10 +266,13 @@
             setStatus('loading', '자막 내용을 불러오는 중...');
             try {
                 const track = captionTracks[idx];
+                // 서버가 자막을 파싱하여 JSON 배열로 반환함
                 const resp = await fetch(`/api/subtitle?url=${encodeURIComponent(track.baseUrl)}`);
-                const xml = await resp.text();
+                const data = await resp.json();
 
-                currentSubtitles = parseXml(xml);
+                if (data.error) throw new Error(data.error);
+
+                currentSubtitles = data;
 
                 if (currentSubtitles.length === 0) {
                     setStatus('error', '자막이 비어 있습니다.');
@@ -282,18 +285,6 @@
             } catch (err) {
                 setStatus('error', '자막 로드 실패: ' + err.message);
             }
-        }
-
-        function parseXml(xml) {
-            const doc = new DOMParser().parseFromString(xml, 'text/xml');
-            const subs = [];
-            doc.querySelectorAll('text').forEach(el => {
-                const start = parseFloat(el.getAttribute('start') || '0');
-                const dur = parseFloat(el.getAttribute('dur') || '0');
-                const text = decodeEntities(el.textContent || '').trim();
-                if (text) subs.push({ start, dur, text });
-            });
-            return subs;
         }
 
         /* ── 표시 ── */
