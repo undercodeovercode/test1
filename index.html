@@ -268,7 +268,14 @@
                 const track = captionTracks[idx];
                 // 서버가 자막을 파싱하여 JSON 배열로 반환함
                 const resp = await fetch(`/api/subtitle?url=${encodeURIComponent(track.baseUrl)}`);
-                const data = await resp.json();
+                const text = await resp.text();
+
+                let data;
+                try {
+                    data = JSON.parse(text);
+                } catch (_) {
+                    throw new Error('서버 응답을 파싱할 수 없습니다.');
+                }
 
                 if (data.error) throw new Error(data.error);
 

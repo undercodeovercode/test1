@@ -71,73 +71,97 @@ app.get('/api/subtitle', async (req, res) => {
  *   events[].segs[].utf8 에 텍스트가 있고,
  *   events[].tStartMs / dDurationMs 에 타이밍이 있다.
  *   XML 파싱보다 안정적이고, 줄바꿈/특수문자 처리가 쉽다.
+ *
+ * 왜 try/catch로 감싸는가:
+ *   YouTube가 fmt=json3 요청에 대해 항상 JSON을 반환하지 않는다.
+ *   HTML 에러 페이지, 빈 응답 등을 반환할 수 있으므로,
+ *   파싱 실패 시 빈 배열을 반환하여 XML 폴백이 실행되게 한다.
  */
 async function fetchAndParseJson3(url) {
-    const resp = await fetch(url);
-    if (!resp.ok) return [];
+    try {
+        const resp = await fetch(url);
+        if (!resp.ok) return [];
 
-    const data = await resp.json();
-    if (!data.events) return [];
+        // resp.json() 대신 text → JSON.parse 사용:
+        // YouTube가 JSON이 아닌 응답(HTML 등)을 보내면
+        // resp.json()은 스트림을 소비한 뒤 실패하므로 디버깅이 어렵다.
+        // text로 먼저 받으면 로그 확인도 가능하고 안전하다.
+        const raw = await resp.text();
+        if (!raw || !raw.trim().startsWith('{')) return [];
 
-    const subtitles = [];
-    for (const event of data.events) {
-        // segs가 없는 이벤트는 줄바꿈/스타일 전용이므로 건너뜀
-        if (!event.segs) continue;
+        const data = JSON.parse(raw);
+        if (!data.events) return [];
 
-        const text = event.segs.map(s => s.utf8 || '').join('').trim();
-        if (!text || text === '\n') continue;
-
-        subtitles.push({
-            start: (event.tStartMs || 0) / 1000,
-            dur: (event.dDurationMs || 0) / 1000,
-            text,
-        });
+        const subtitles = [];
+        for (const event of data.events) {
+            if (!event.segs) continue;
+            const text = event.segs.map(s => s.utf8 || '').join('').trim();
+            if (!text || text === '\n') continue;
+            subtitles.push({
+                start: (event.tStartMs || 0) / 1000,
+                dur: (event.dDurationMs || 0) / 1000,
+                text,
+            });
+        }
+        return subtitles;
+    } catch (err) {
+        // json3 파싱 실패는 치명적이지 않음 — XML 폴백으로 넘어감
+        console.log('json3 파싱 실패 (XML 폴백 시도):', err.message);
+        return [];
     }
-    return subtitles;
 }
 
 /*
  * XML 형식 파싱 (srv1 <text> 및 srv3 <p> 모두 지원)
  *
- * 폴백용으로, json3 요청이 실패했을 때만 사용된다.
+ * json3 요청이 실패했을 때 사용되는 폴백.
  * srv1: <text start="초" dur="초">내용</text>
  * srv3: <p t="밀리초" d="밀리초">내용</p>
+ *
+ * 왜 try/catch로 감싸는가:
+ *   네트워크 오류나 YouTube의 예상치 못한 응답 형식에 대해
+ *   빈 배열을 반환하여 클라이언트에 "자막이 비어 있습니다" 표시.
  */
 async function fetchAndParseXml(url) {
-    const resp = await fetch(url);
-    if (!resp.ok) return [];
+    try {
+        const resp = await fetch(url);
+        if (!resp.ok) return [];
 
-    const xml = await resp.text();
-    const subtitles = [];
+        const xml = await resp.text();
+        const subtitles = [];
 
-    // srv1 형식: <text start="1.23" dur="4.56">
-    const textRegex = /<text[^>]*start="([^"]*)"[^>]*dur="([^"]*)"[^>]*>([\s\S]*?)<\/text>/g;
-    let match;
-    while ((match = textRegex.exec(xml)) !== null) {
-        const text = decodeXmlEntities(match[3]).trim();
-        if (text) {
-            subtitles.push({
-                start: parseFloat(match[1]) || 0,
-                dur: parseFloat(match[2]) || 0,
-                text,
-            });
+        // srv1 형식: <text start="1.23" dur="4.56">
+        const textRegex = /<text[^>]*start="([^"]*)"[^>]*dur="([^"]*)"[^>]*>([\s\S]*?)<\/text>/g;
+        let match;
+        while ((match = textRegex.exec(xml)) !== null) {
+            const text = decodeXmlEntities(match[3]).trim();
+            if (text) {
+                subtitles.push({
+                    start: parseFloat(match[1]) || 0,
+                    dur: parseFloat(match[2]) || 0,
+                    text,
+                });
+            }
         }
-    }
-    if (subtitles.length > 0) return subtitles;
+        if (subtitles.length > 0) return subtitles;
 
-    // srv3 형식: <p t="1230" d="4560">
-    const pRegex = /<p[^>]*t="([^"]*)"[^>]*d="([^"]*)"[^>]*>([\s\S]*?)<\/p>/g;
-    while ((match = pRegex.exec(xml)) !== null) {
-        const text = decodeXmlEntities(match[3]).trim();
-        if (text) {
-            subtitles.push({
-                start: (parseFloat(match[1]) || 0) / 1000,
-                dur: (parseFloat(match[2]) || 0) / 1000,
-                text,
-            });
+        // srv3 형식: <p t="1230" d="4560">
+        const pRegex = /<p[^>]*t="([^"]*)"[^>]*d="([^"]*)"[^>]*>([\s\S]*?)<\/p>/g;
+        while ((match = pRegex.exec(xml)) !== null) {
+            const text = decodeXmlEntities(match[3]).trim();
+            if (text) {
+                subtitles.push({
+                    start: (parseFloat(match[1]) || 0) / 1000,
+                    dur: (parseFloat(match[2]) || 0) / 1000,
+                    text,
+                });
+            }
         }
+        return subtitles;
+    } catch (err) {
+        console.log('XML 파싱 실패:', err.message);
+        return [];
     }
-    return subtitles;
 }
 
 /* URL의 쿼리 파라미터를 교체하는 헬퍼 */
