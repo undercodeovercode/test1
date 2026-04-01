@@ -13,16 +13,14 @@ const BROWSER_HEADERS = {
 };
 
 /*
- * GET /api/captions/:videoId
- *
- * YouTube 페이지 HTML을 파싱하여 captionTracks를 추출한다.
- * 왜 InnerTube 대신 페이지 파싱을 쓰는가:
- *   InnerTube는 ip=0.0.0.0으로 서명된 baseUrl을 반환하여
- *   서버에서 재요청하면 빈 응답이 온다.
- *   반면 YouTube 페이지를 직접 요청하면,
- *   서버의 실제 IP로 서명된 baseUrl이 포함되어
- *   같은 서버에서 바로 자막을 가져올 수 있다.
+ * 세션 쿠키 저장소.
+ * YouTube 페이지를 요청하면 Set-Cookie로 세션 쿠키를 내려준다.
+ * 이 쿠키가 없으면 timedtext URL 요청 시 빈 응답(0바이트)이 온다.
+ * 브라우저에서는 같은 도메인 쿠키가 자동 공유되지만
+ * Node.js fetch()는 요청마다 독립적이므로 수동으로 관리해야 한다.
  */
+let sessionCookies = '';
+
 app.get('/api/captions/:videoId', async (req, res) => {
     const { videoId } = req.params;
 
@@ -33,6 +31,16 @@ app.get('/api/captions/:videoId', async (req, res) => {
             `https://www.youtube.com/watch?v=${videoId}`,
             { headers: BROWSER_HEADERS },
         );
+
+        // YouTube가 보낸 Set-Cookie 헤더를 저장
+        const setCookies = resp.headers.getSetCookie?.() || [];
+        if (setCookies.length > 0) {
+            sessionCookies = setCookies
+                .map(c => c.split(';')[0])  // 쿠키 이름=값 부분만 추출
+                .join('; ');
+            console.log('세션 쿠키 저장:', sessionCookies.substring(0, 100) + '...');
+        }
+
         const html = await resp.text();
         console.log(`페이지 크기: ${html.length}바이트`);
 
@@ -61,12 +69,14 @@ app.get('/api/captions/:videoId', async (req, res) => {
         console.log(`트랙 ${rawTracks.length}개 발견`);
 
         const tracks = rawTracks.map((t, i) => {
-            console.log(`  [${i}] ${t.languageCode} (${t.kind || 'manual'}) baseUrl 길이: ${t.baseUrl?.length || 0}`);
+            const url = t.baseUrl || '';
+            console.log(`  [${i}] ${t.languageCode} (${t.kind || 'manual'})`);
+            console.log(`      URL 처음 120자: ${url.substring(0, 120)}`);
             return {
                 label: t.name?.simpleText || t.languageCode,
                 languageCode: t.languageCode,
                 kind: t.kind || '',
-                baseUrl: t.baseUrl,
+                baseUrl: url,
             };
         });
 
@@ -77,39 +87,33 @@ app.get('/api/captions/:videoId', async (req, res) => {
     }
 });
 
-/*
- * GET /api/subtitle?url=SIGNED_BASE_URL
- *
- * YouTube 페이지에서 추출한 서명된 baseUrl로 자막을 가져온다.
- * 이 URL은 서버의 IP로 서명되어 있으므로 같은 서버에서 요청하면 작동한다.
- *
- * json3 → srv1 XML → 원본 순으로 시도한다.
- */
 app.get('/api/subtitle', async (req, res) => {
     const { url } = req.query;
     if (!url) return res.status(400).json({ error: 'url 파라미터 필요' });
 
     try {
         console.log(`\n===== 자막 내용 요청 =====`);
+        console.log('요청 URL 처음 150자:', url.substring(0, 150));
+
+        // 세션 쿠키를 포함한 헤더
+        const headers = { ...BROWSER_HEADERS };
+        if (sessionCookies) {
+            headers.Cookie = sessionCookies + '; CONSENT=PENDING+987';
+        }
+        console.log('쿠키:', headers.Cookie?.substring(0, 80) + '...');
 
         // 1순위: json3
         const json3Url = setUrlParam(url, 'fmt', 'json3');
         console.log('[1] json3 시도');
-        let subs = await fetchAndParseJson3(json3Url);
-        if (subs.length > 0) {
-            console.log(`[1] 성공: ${subs.length}개`);
-            return res.json(subs);
-        }
+        let subs = await fetchSubtitle(json3Url, headers, 'json3');
+        if (subs.length > 0) return res.json(subs);
 
-        // 2순위: 원본 baseUrl 그대로 (기본 XML 형식)
+        // 2순위: 원본 baseUrl
         console.log('[2] 원본 URL 시도');
-        subs = await fetchAndParseXml(url);
-        if (subs.length > 0) {
-            console.log(`[2] 성공: ${subs.length}개`);
-            return res.json(subs);
-        }
+        subs = await fetchSubtitle(url, headers, 'xml');
+        if (subs.length > 0) return res.json(subs);
 
-        console.log('모든 형식 실패, 빈 배열 반환');
+        console.log('모든 형식 실패');
         res.json([]);
     } catch (err) {
         console.error('자막 내용 실패:', err.message);
@@ -117,73 +121,77 @@ app.get('/api/subtitle', async (req, res) => {
     }
 });
 
-/* ── json3 파싱 ── */
-async function fetchAndParseJson3(url) {
+async function fetchSubtitle(url, headers, mode) {
     try {
-        const resp = await fetch(url, { headers: BROWSER_HEADERS });
-        if (!resp.ok) { console.log(`  HTTP ${resp.status}`); return []; }
+        const resp = await fetch(url, { headers });
+        console.log(`  HTTP ${resp.status}, Content-Type: ${resp.headers.get('content-type')}`);
+        if (!resp.ok) return [];
 
         const raw = await resp.text();
         console.log(`  응답: ${raw.length}바이트`);
-        if (!raw || !raw.trim().startsWith('{')) return [];
-
-        const data = JSON.parse(raw);
-        if (!data.events) return [];
-
-        const subtitles = [];
-        for (const event of data.events) {
-            if (!event.segs) continue;
-            const text = event.segs.map(s => s.utf8 || '').join('').trim();
-            if (!text || text === '\n') continue;
-            subtitles.push({
-                start: (event.tStartMs || 0) / 1000,
-                dur: (event.dDurationMs || 0) / 1000,
-                text,
-            });
+        if (raw.length > 0) {
+            console.log(`  처음 200자: ${raw.substring(0, 200)}`);
         }
-        return subtitles;
+        if (!raw || raw.length === 0) return [];
+
+        if (mode === 'json3') {
+            return parseJson3(raw);
+        } else {
+            return parseXml(raw);
+        }
     } catch (err) {
-        console.log('  json3 실패:', err.message);
+        console.log(`  요청 실패: ${err.message}`);
         return [];
     }
 }
 
-/* ── XML 파싱 (srv1 + srv3) ── */
-async function fetchAndParseXml(url) {
+function parseJson3(raw) {
     try {
-        const resp = await fetch(url, { headers: BROWSER_HEADERS });
-        if (!resp.ok) { console.log(`  HTTP ${resp.status}`); return []; }
-
-        const xml = await resp.text();
-        console.log(`  응답: ${xml.length}바이트, 처음 300자: ${xml.substring(0, 300)}`);
-        const subtitles = [];
-
-        // srv1: <text start="초" dur="초">
-        const textRegex = /<text[^>]*start="([^"]*)"[^>]*dur="([^"]*)"[^>]*>([\s\S]*?)<\/text>/g;
-        let match;
-        while ((match = textRegex.exec(xml)) !== null) {
-            const text = decodeXml(match[3]).trim();
-            if (text) subtitles.push({ start: +match[1] || 0, dur: +match[2] || 0, text });
+        if (!raw.trim().startsWith('{')) return [];
+        const data = JSON.parse(raw);
+        if (!data.events) return [];
+        const subs = [];
+        for (const ev of data.events) {
+            if (!ev.segs) continue;
+            const text = ev.segs.map(s => s.utf8 || '').join('').trim();
+            if (!text || text === '\n') continue;
+            subs.push({ start: (ev.tStartMs || 0) / 1000, dur: (ev.dDurationMs || 0) / 1000, text });
         }
-        if (subtitles.length > 0) return subtitles;
+        return subs;
+    } catch (_) { return []; }
+}
 
-        // srv3: <p t="밀리초" d="밀리초">
-        const pRegex = /<p[^>]*t="([^"]*)"[^>]*d="([^"]*)"[^>]*>([\s\S]*?)<\/p>/g;
-        while ((match = pRegex.exec(xml)) !== null) {
-            const text = decodeXml(match[3]).trim();
-            if (text) subtitles.push({ start: (+match[1] || 0) / 1000, dur: (+match[2] || 0) / 1000, text });
-        }
-        return subtitles;
-    } catch (err) {
-        console.log('  XML 실패:', err.message);
-        return [];
+function parseXml(xml) {
+    const subs = [];
+    // srv1: <text start="" dur="">
+    let m, re = /<text[^>]*start="([^"]*)"[^>]*dur="([^"]*)"[^>]*>([\s\S]*?)<\/text>/g;
+    while ((m = re.exec(xml)) !== null) {
+        const t = decodeXml(m[3]).trim();
+        if (t) subs.push({ start: +m[1] || 0, dur: +m[2] || 0, text: t });
     }
+    if (subs.length > 0) return subs;
+
+    // srv3: <p t="" d="">
+    re = /<p[^>]*t="([^"]*)"[^>]*d="([^"]*)"[^>]*>([\s\S]*?)<\/p>/g;
+    while ((m = re.exec(xml)) !== null) {
+        const t = decodeXml(m[3]).trim();
+        if (t) subs.push({ start: (+m[1] || 0) / 1000, dur: (+m[2] || 0) / 1000, text: t });
+    }
+    return subs;
 }
 
 function setUrlParam(url, key, val) {
-    const u = new URL(url);
-    u.searchParams.set(key, val);
-    return u.toString();
+    try {
+        const u = new URL(url);
+        u.searchParams.set(key, val);
+        return u.toString();
+    } catch (_) {
+        // 상대 URL이면 도메인 붙이기
+        const full = url.startsWith('/') ? 'https://www.youtube.com' + url : url;
+        const u = new URL(full);
+        u.searchParams.set(key, val);
+        return u.toString();
+    }
 }
 
 function decodeXml(s) {
