@@ -21,6 +21,22 @@ const ANDROID_CONTEXT = {
 const ANDROID_UA = `com.google.android.youtube/${ANDROID_VERSION} (Linux; U; Android 14)`;
 const WEB_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
 
+const LANG_NAMES = {
+    ko: '한국어', en: 'English', ja: '日本語', zh: '中文',
+    'zh-Hans': '中文(简体)', 'zh-Hant': '中文(繁體)',
+    es: 'Español', 'es-ES': 'Español (España)',
+    fr: 'Français', de: 'Deutsch', it: 'Italiano',
+    pt: 'Português', 'pt-BR': 'Português (Brasil)',
+    ru: 'Русский', ar: 'العربية', hi: 'हिन्दी',
+    th: 'ไทย', vi: 'Tiếng Việt', id: 'Bahasa Indonesia',
+    tr: 'Türkçe', pl: 'Polski', nl: 'Nederlands',
+    sv: 'Svenska', da: 'Dansk', fi: 'Suomi', no: 'Norsk',
+    uk: 'Українська', cs: 'Čeština', ro: 'Română',
+    hu: 'Magyar', el: 'Ελληνικά', he: 'עברית',
+    km: 'ភាសាខ្មែរ', ms: 'Bahasa Melayu', tl: 'Filipino',
+    bn: 'বাংলা', ta: 'தமிழ்', te: 'తెలుగు',
+};
+
 app.get('/api/captions/:videoId', async (req, res) => {
     const { videoId } = req.params;
     const lang = req.query.lang || undefined;
@@ -69,7 +85,7 @@ app.get('/api/captions/:videoId', async (req, res) => {
         // 사용 가능한 언어 목록도 함께 반환
         const languages = tracks.map(t => ({
             code: t.languageCode,
-            label: t.label || t.languageCode,
+            label: LANG_NAMES[t.languageCode] || t.label || t.languageCode,
             kind: t.kind || '',
         }));
 
