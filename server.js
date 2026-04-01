@@ -1,5 +1,5 @@
-const express = require('express');
-const { YoutubeTranscript } = require('youtube-transcript');
+import express from 'express';
+import { YoutubeTranscript } from 'youtube-transcript';
 const app = express();
 const PORT = 3000;
 
