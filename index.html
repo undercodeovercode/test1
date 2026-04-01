@@ -396,12 +396,6 @@
             }
         }
 
-        function clearStatus() {
-            const el = document.getElementById('status');
-            el.className = 'status';
-            el.style.display = 'none';
-        }
-
         async function fetchWithProxy(url) {
             for (const proxy of CORS_PROXIES) {
                 try {
@@ -448,13 +442,13 @@
 
                 // Extract caption tracks from the page
                 const captionRegex = /"captionTracks"\s*:\s*(\[.*?\])/;
-                const match = pageHtml.match(captionRegex);
+                let match = pageHtml.match(captionRegex);
 
                 if (!match) {
                     // Try alternative pattern
                     const altRegex = /captionTracks.*?(\[.*?\])/;
-                    const altMatch = pageHtml.match(altRegex);
-                    if (!altMatch) {
+                    match = pageHtml.match(altRegex);
+                    if (!match) {
                         setStatus('error', '이 영상에는 자막이 없거나 자막을 가져올 수 없습니다.');
                         document.getElementById('extractBtn').disabled = false;
                         return;
@@ -475,7 +469,7 @@
                     const tracksStr = match[1];
                     tracksJson = JSON.parse(tracksStr);
                 } catch (e) {
-                    // Try to extract more carefully
+                    // Try to extract more carefully using bracket matching
                     const startIdx = pageHtml.indexOf('"captionTracks":');
                     if (startIdx === -1) {
                         setStatus('error', '자막 데이터를 파싱할 수 없습니다.');
