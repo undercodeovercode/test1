@@ -84,16 +84,37 @@ app.get('/api/captions/:videoId', async (req, res) => {
 
         console.log(`트랙 ${tracks.length}개:`, tracks.map(t => t.languageCode).join(', '));
 
-        // 언어 선택
-        const track = lang
-            ? tracks.find(t => t.languageCode === lang) || tracks[0]
-            : tracks[0];
+        // 언어 목록: 원본 자막 + 한국어 자동번역(원본에 없으면 추가)
+        const hasKorean = tracks.some(t => t.languageCode === 'ko');
+        const languages = tracks.map(t => ({
+            code: t.languageCode,
+            label: LANG_NAMES[t.languageCode] || t.label || t.languageCode,
+            kind: t.kind || '',
+        }));
+        if (!hasKorean) {
+            languages.unshift({
+                code: 'ko',
+                label: '한국어 (자동 번역)',
+                kind: 'translate',
+            });
+        }
 
-        console.log(`선택된 트랙: ${track.languageCode}`);
-        console.log(`baseUrl 처음 120자: ${track.baseUrl.substring(0, 120)}`);
+        // 언어 선택 및 자막 URL 구성
+        let fetchUrl;
+        if (lang === 'ko' && !hasKorean) {
+            // 한국어 자동 번역: 첫 번째 트랙의 baseUrl에 &tlang=ko 추가
+            fetchUrl = tracks[0].baseUrl + '&tlang=ko';
+            console.log('한국어 자동 번역 요청');
+        } else {
+            const track = lang
+                ? tracks.find(t => t.languageCode === lang) || tracks[0]
+                : tracks[0];
+            fetchUrl = track.baseUrl;
+            console.log(`선택된 트랙: ${track.languageCode}`);
+        }
 
         // 2단계: baseUrl로 자막 XML 가져오기
-        const subtitleResp = await fetch(track.baseUrl, {
+        const subtitleResp = await fetch(fetchUrl, {
             headers: { 'User-Agent': WEB_UA },
         });
         const xml = await subtitleResp.text();
@@ -104,15 +125,8 @@ app.get('/api/captions/:videoId', async (req, res) => {
         }
 
         // 3단계: XML 파싱
-        const subtitles = parseSubtitleXml(xml, track.languageCode);
+        const subtitles = parseSubtitleXml(xml, lang || tracks[0].languageCode);
         console.log(`파싱 결과: ${subtitles.length}개`);
-
-        // 사용 가능한 언어 목록도 함께 반환
-        const languages = tracks.map(t => ({
-            code: t.languageCode,
-            label: LANG_NAMES[t.languageCode] || t.label || t.languageCode,
-            kind: t.kind || '',
-        }));
 
         res.json({ subtitles, languages });
     } catch (err) {
