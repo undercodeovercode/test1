@@ -3,6 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
     <title>유튜브 자막 추출기</title>
     <style>
         * {
@@ -131,6 +133,7 @@
             border-radius: 12px;
             display: none;
             font-size: 15px;
+            line-height: 1.5;
         }
 
         .status.loading {
@@ -364,13 +367,22 @@
     </div>
 
     <script>
+        /* ── 상태 ── */
         let currentSubtitles = [];
         let captionTracks = [];
         let currentVideoId = '';
-        let workingInstance = '';
+        let activeMethod = '';
 
-        // Invidious instances (CORS-friendly YouTube alternative frontend)
-        const INVIDIOUS_INSTANCES = [
+        /* ── CORS 프록시 목록 (YouTube timedtext API 호출용) ── */
+        const CORS_PROXIES = [
+            url => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+            url => `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
+            url => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+            url => `https://corsproxy.org/?url=${encodeURIComponent(url)}`,
+        ];
+
+        /* ── Invidious 인스턴스 (직접 API) ── */
+        const INVIDIOUS = [
             'https://inv.nadeko.net',
             'https://yewtu.be',
             'https://vid.puffyan.us',
@@ -382,27 +394,28 @@
             'https://invidious.perennialte.ch',
             'https://yt.artemislena.eu',
             'https://invidious.nerdvpn.de',
-            'https://invidious.jing.rocks'
+            'https://invidious.jing.rocks',
         ];
 
-        // Piped instances (another CORS-friendly YouTube frontend)
-        const PIPED_INSTANCES = [
+        /* ── Piped 인스턴스 (직접 API) ── */
+        const PIPED = [
             'https://pipedapi.kavin.rocks',
             'https://pipedapi.r4fo.com',
             'https://pipedapi.adminforge.de',
             'https://api.piped.projectsegfau.lt',
             'https://pipedapi.in.projectsegfau.lt',
-            'https://pipedapi.leptons.xyz'
+            'https://pipedapi.leptons.xyz',
         ];
 
+        /* ── 유틸리티 ── */
         function extractVideoId(url) {
             const patterns = [
                 /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/v\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/,
-                /^([a-zA-Z0-9_-]{11})$/
+                /^([a-zA-Z0-9_-]{11})$/,
             ];
-            for (const pattern of patterns) {
-                const match = url.match(pattern);
-                if (match) return match[1];
+            for (const p of patterns) {
+                const m = url.match(p);
+                if (m) return m[1];
             }
             return null;
         }
@@ -411,146 +424,191 @@
             const el = document.getElementById('status');
             el.className = 'status ' + type;
             if (type === 'loading') {
-                el.innerHTML = '<span class="spinner"></span>' + message;
+                el.innerHTML = '<span class="spinner"></span>' + escapeHtml(message);
             } else {
                 el.textContent = message;
             }
         }
 
-        // Fetch with timeout helper
-        function fetchWithTimeout(url, timeoutMs = 8000) {
-            const controller = new AbortController();
-            const timer = setTimeout(() => controller.abort(), timeoutMs);
-            return fetch(url, { signal: controller.signal })
-                .finally(() => clearTimeout(timer));
+        function fetchT(url, ms = 8000) {
+            const c = new AbortController();
+            const t = setTimeout(() => c.abort(), ms);
+            return fetch(url, { signal: c.signal }).finally(() => clearTimeout(t));
         }
 
-        // Try Invidious instance → returns { captions, instance }
-        function tryInvidious(instance, videoId) {
-            return fetchWithTimeout(`${instance}/api/v1/captions/${videoId}`)
-                .then(async resp => {
-                    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                    const data = await resp.json();
-                    if (!data.captions || data.captions.length === 0) {
-                        throw new Error('자막 없음');
+        function decodeHtmlEntities(str) {
+            const t = document.createElement('textarea');
+            t.innerHTML = str;
+            return t.value;
+        }
+
+        function escapeHtml(str) {
+            const d = document.createElement('div');
+            d.textContent = str;
+            return d.innerHTML;
+        }
+
+        /* ══════════════════════════════════════════
+           방법 1: YouTube timedtext API + CORS 프록시
+           작은 XML만 가져오므로 가볍고 빠름
+           ══════════════════════════════════════════ */
+        async function fetchViaTimedText(videoId) {
+            const listUrl = `https://video.google.com/timedtext?type=list&v=${videoId}`;
+
+            for (const makeProxy of CORS_PROXIES) {
+                try {
+                    const resp = await fetchT(makeProxy(listUrl), 10000);
+                    if (!resp.ok) continue;
+                    const xml = await resp.text();
+                    const parser = new DOMParser();
+                    const doc = parser.parseFromString(xml, 'text/xml');
+                    const tracks = doc.querySelectorAll('track');
+                    if (tracks.length === 0) continue;
+
+                    const workingProxy = makeProxy;
+                    const result = [];
+                    tracks.forEach(tr => {
+                        const lang = tr.getAttribute('lang_code');
+                        const name = tr.getAttribute('name') || '';
+                        const label = tr.getAttribute('lang_translated') || lang;
+                        const subUrl = `https://video.google.com/timedtext?lang=${lang}&v=${videoId}&name=${encodeURIComponent(name)}`;
+                        result.push({
+                            label,
+                            languageCode: lang,
+                            fetchUrl: workingProxy(subUrl),
+                        });
+                    });
+                    if (result.length > 0) {
+                        activeMethod = 'timedtext';
+                        return result;
                     }
-                    return {
-                        type: 'invidious',
-                        instance,
-                        tracks: data.captions.map(t => ({
-                            label: t.label,
-                            languageCode: t.language_code,
-                            url: `${instance}${t.url}`,
-                        }))
-                    };
+                } catch (_) {
+                    continue;
+                }
+            }
+            return null;
+        }
+
+        /* ══════════════════════════════════════════
+           방법 2: Invidious API (CORS 지원)
+           ══════════════════════════════════════════ */
+        function tryInvidious(inst, videoId) {
+            return fetchT(`${inst}/api/v1/captions/${videoId}`)
+                .then(async r => {
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    const d = await r.json();
+                    if (!d.captions?.length) throw new Error('empty');
+                    return d.captions.map(t => ({
+                        label: t.label,
+                        languageCode: t.language_code,
+                        fetchUrl: `${inst}${t.url}`,
+                    }));
                 });
         }
 
-        // Try Piped instance → returns { captions, instance }
-        function tryPiped(instance, videoId) {
-            return fetchWithTimeout(`${instance}/streams/${videoId}`)
-                .then(async resp => {
-                    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                    const data = await resp.json();
-                    if (!data.subtitles || data.subtitles.length === 0) {
-                        throw new Error('자막 없음');
+        /* ══════════════════════════════════════════
+           방법 3: Piped API (CORS 지원)
+           ══════════════════════════════════════════ */
+        function tryPiped(inst, videoId) {
+            return fetchT(`${inst}/streams/${videoId}`)
+                .then(async r => {
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    const d = await r.json();
+                    if (!d.subtitles?.length) throw new Error('empty');
+                    // Piped title 저장
+                    if (d.title) {
+                        document.getElementById('videoTitle').textContent = d.title;
                     }
-                    return {
-                        type: 'piped',
-                        instance,
-                        title: data.title || '',
-                        tracks: data.subtitles.map(t => ({
-                            label: t.name || t.code,
-                            languageCode: t.code,
-                            url: t.url,
-                            autoGenerated: t.autoGenerated,
-                        }))
-                    };
+                    return d.subtitles.map(t => ({
+                        label: t.name || t.code,
+                        languageCode: t.code,
+                        fetchUrl: t.url,
+                        autoGenerated: t.autoGenerated,
+                    }));
                 });
         }
 
-        // Race all instances concurrently with Promise.any
+        /* ══════════════════════════════════════════
+           모든 방법 병렬 시도
+           ══════════════════════════════════════════ */
         async function fetchCaptions(videoId) {
-            const allPromises = [
-                ...INVIDIOUS_INSTANCES.map(inst => tryInvidious(inst, videoId)),
-                ...PIPED_INSTANCES.map(inst => tryPiped(inst, videoId)),
+            // 방법 1 (timedtext)은 순차 프록시 시도이므로 별도 promise
+            const timedTextPromise = fetchViaTimedText(videoId).then(r => {
+                if (!r) throw new Error('timedtext failed');
+                return r;
+            });
+
+            // 방법 2+3 (Invidious + Piped)은 모든 인스턴스 동시
+            const instancePromises = [
+                ...INVIDIOUS.map(inst => tryInvidious(inst, videoId)),
+                ...PIPED.map(inst => tryPiped(inst, videoId)),
             ];
 
+            // Promise.any: 하나라도 성공하면 즉시 반환
             try {
-                return await Promise.any(allPromises);
+                const result = await Promise.any([timedTextPromise, ...instancePromises]);
+                return result;
             } catch (err) {
-                // All failed — check if it's because no captions exist
-                if (err instanceof AggregateError) {
-                    const noCaptionsError = err.errors.find(e => e.message === '자막 없음');
-                    if (noCaptionsError) {
-                        throw new Error('이 영상에는 사용 가능한 자막이 없습니다.');
-                    }
-                }
-                throw new Error('모든 서버에 연결할 수 없습니다. 잠시 후 다시 시도해주세요.');
+                throw new Error(
+                    '자막을 가져올 수 없습니다.\n' +
+                    '1) 영상에 자막이 없을 수 있습니다.\n' +
+                    '2) 네트워크 문제일 수 있습니다. 잠시 후 다시 시도해주세요.'
+                );
             }
         }
 
+        /* ══════════════════════════════════════════
+           메인 핸들러
+           ══════════════════════════════════════════ */
         async function handleExtract() {
             const url = document.getElementById('urlInput').value.trim();
-            if (!url) {
-                setStatus('error', '유튜브 링크를 입력해주세요.');
-                return;
-            }
+            if (!url) { setStatus('error', '유튜브 링크를 입력해주세요.'); return; }
 
             const videoId = extractVideoId(url);
-            if (!videoId) {
-                setStatus('error', '올바른 유튜브 링크가 아닙니다.');
-                return;
-            }
+            if (!videoId) { setStatus('error', '올바른 유튜브 링크가 아닙니다.'); return; }
 
             currentVideoId = videoId;
-
             document.getElementById('extractBtn').disabled = true;
             document.getElementById('resultSection').style.display = 'none';
             document.getElementById('languageSelect').style.display = 'none';
 
-            // Show video info with thumbnail
-            document.getElementById('thumbnail').src = `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
+            // 썸네일 표시
+            document.getElementById('thumbnail').src =
+                `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
             document.getElementById('videoInfo').style.display = 'block';
             document.getElementById('videoTitle').textContent = '';
 
-            setStatus('loading', '자막 정보를 가져오는 중... (여러 서버에 동시 요청 중)');
+            setStatus('loading', '자막을 가져오는 중... (여러 경로로 동시 시도)');
 
             try {
-                const result = await fetchCaptions(videoId);
-                workingInstance = result.instance;
-                captionTracks = result.tracks;
+                captionTracks = await fetchCaptions(videoId);
 
-                // Set title if Piped returned it
-                if (result.title) {
-                    document.getElementById('videoTitle').textContent = result.title;
-                } else {
-                    // Try fetching title from YouTube oEmbed (CORS-friendly)
+                // 제목 가져오기 (oEmbed, CORS 지원)
+                if (!document.getElementById('videoTitle').textContent) {
                     fetchVideoTitle(videoId);
                 }
 
-                // Populate language dropdown
-                const dropdown = document.getElementById('langDropdown');
-                dropdown.innerHTML = '';
-                captionTracks.forEach((track, idx) => {
-                    const option = document.createElement('option');
-                    option.value = idx;
-                    const auto = track.autoGenerated ? ' (자동 생성)' : '';
-                    option.textContent = track.label + auto;
-                    dropdown.appendChild(option);
+                // 드롭다운 채우기
+                const dd = document.getElementById('langDropdown');
+                dd.innerHTML = '';
+                captionTracks.forEach((t, i) => {
+                    const opt = document.createElement('option');
+                    opt.value = i;
+                    const auto = t.autoGenerated ? ' (자동 생성)' : '';
+                    opt.textContent = t.label + auto;
+                    dd.appendChild(opt);
                 });
-
                 document.getElementById('languageSelect').style.display = 'block';
 
-                // Auto-select Korean if available
-                const koreanIdx = captionTracks.findIndex(t =>
-                    t.languageCode === 'ko' || t.label.includes('한국어') || t.label.includes('Korean')
+                // 한국어 자동 선택
+                const ki = captionTracks.findIndex(t =>
+                    t.languageCode === 'ko' ||
+                    t.label.includes('한국어') ||
+                    t.label.includes('Korean')
                 );
-                if (koreanIdx !== -1) {
-                    dropdown.value = koreanIdx;
-                }
+                if (ki !== -1) dd.value = ki;
 
-                await loadSubtitles(dropdown.value);
+                await loadSubtitles(dd.value);
 
             } catch (err) {
                 setStatus('error', err.message);
@@ -559,40 +617,37 @@
             document.getElementById('extractBtn').disabled = false;
         }
 
-        // Fetch video title from YouTube oEmbed (supports CORS)
         async function fetchVideoTitle(videoId) {
             try {
-                const resp = await fetchWithTimeout(
+                const r = await fetchT(
                     `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`
                 );
-                if (resp.ok) {
-                    const data = await resp.json();
-                    document.getElementById('videoTitle').textContent = data.title || '';
+                if (r.ok) {
+                    const d = await r.json();
+                    document.getElementById('videoTitle').textContent = d.title || '';
                 }
             } catch (_) {}
         }
 
         async function handleLanguageChange() {
-            const idx = document.getElementById('langDropdown').value;
-            await loadSubtitles(idx);
+            await loadSubtitles(document.getElementById('langDropdown').value);
         }
 
         async function loadSubtitles(trackIdx) {
-            setStatus('loading', '자막을 불러오는 중...');
+            setStatus('loading', '자막 내용을 불러오는 중...');
 
             try {
                 const track = captionTracks[trackIdx];
+                const resp = await fetchT(track.fetchUrl, 10000);
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 
-                const response = await fetchWithTimeout(track.url, 10000);
-                if (!response.ok) {
-                    throw new Error(`자막 요청 실패 (HTTP ${response.status})`);
-                }
+                const text = await resp.text();
 
-                const text = await response.text();
-
-                // Piped returns JSON, Invidious returns XML
+                // Piped는 JSON(VTT 형태), 나머지는 XML
                 if (text.trim().startsWith('{') || text.trim().startsWith('[')) {
                     currentSubtitles = parseSubtitleJson(text);
+                } else if (text.trim().startsWith('WEBVTT')) {
+                    currentSubtitles = parseVTT(text);
                 } else {
                     currentSubtitles = parseSubtitleXml(text);
                 }
@@ -611,153 +666,150 @@
             }
         }
 
+        /* ── 파서들 ── */
+        function parseSubtitleXml(xml) {
+            const doc = new DOMParser().parseFromString(xml, 'text/xml');
+            const subs = [];
+
+            // <text start="" dur="">
+            const texts = doc.querySelectorAll('text');
+            if (texts.length > 0) {
+                texts.forEach(el => {
+                    const start = parseFloat(el.getAttribute('start') || '0');
+                    const dur = parseFloat(el.getAttribute('dur') || '0');
+                    const t = decodeHtmlEntities(el.textContent || '').trim();
+                    if (t) subs.push({ start, dur, text: t });
+                });
+                return subs;
+            }
+
+            // <p t="" d="">  (srv3)
+            doc.querySelectorAll('p').forEach(el => {
+                const start = parseFloat(el.getAttribute('t') || '0') / 1000;
+                const dur = parseFloat(el.getAttribute('d') || '0') / 1000;
+                const t = decodeHtmlEntities(el.textContent || '').trim();
+                if (t) subs.push({ start, dur, text: t });
+            });
+            return subs;
+        }
+
+        function parseVTT(vtt) {
+            const subs = [];
+            const blocks = vtt.split(/\n\n+/);
+            for (const block of blocks) {
+                const lines = block.trim().split('\n');
+                for (let i = 0; i < lines.length; i++) {
+                    const m = lines[i].match(
+                        /(\d{2}):(\d{2}):(\d{2})\.(\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})\.(\d{3})/
+                    );
+                    if (!m) {
+                        // Also try MM:SS.mmm format
+                        const m2 = lines[i].match(
+                            /(\d{2}):(\d{2})\.(\d{3})\s*-->\s*(\d{2}):(\d{2})\.(\d{3})/
+                        );
+                        if (m2) {
+                            const start = parseInt(m2[1]) * 60 + parseInt(m2[2]) + parseInt(m2[3]) / 1000;
+                            const end = parseInt(m2[4]) * 60 + parseInt(m2[5]) + parseInt(m2[6]) / 1000;
+                            const text = lines.slice(i + 1).join(' ')
+                                .replace(/<[^>]*>/g, '').trim();
+                            if (text) subs.push({ start, dur: end - start, text });
+                            break;
+                        }
+                        continue;
+                    }
+                    const start = parseInt(m[1]) * 3600 + parseInt(m[2]) * 60 +
+                                  parseInt(m[3]) + parseInt(m[4]) / 1000;
+                    const end = parseInt(m[5]) * 3600 + parseInt(m[6]) * 60 +
+                                parseInt(m[7]) + parseInt(m[8]) / 1000;
+                    const text = lines.slice(i + 1).join(' ')
+                        .replace(/<[^>]*>/g, '').trim();
+                    if (text) subs.push({ start, dur: end - start, text });
+                    break;
+                }
+            }
+            return subs;
+        }
+
         function parseSubtitleJson(jsonStr) {
             try {
                 const data = JSON.parse(jsonStr);
-                const segments = Array.isArray(data) ? data : (data.segments || data.body || []);
-                return segments
-                    .filter(seg => seg.text || seg.utf8)
-                    .map(seg => ({
-                        start: (seg.startMs != null ? seg.startMs / 1000 : seg.start) || 0,
-                        dur: (seg.durationMs != null ? seg.durationMs / 1000 : seg.dur) || 0,
-                        text: (seg.text || seg.utf8 || '').trim()
+                const segs = Array.isArray(data) ? data : (data.segments || data.body || []);
+                return segs
+                    .map(s => ({
+                        start: (s.startMs != null ? s.startMs / 1000 : s.start) || 0,
+                        dur: (s.durationMs != null ? s.durationMs / 1000 : s.dur) || 0,
+                        text: (s.text || s.utf8 || '').trim(),
                     }))
-                    .filter(seg => seg.text);
-            } catch (_) {
-                return [];
-            }
+                    .filter(s => s.text);
+            } catch (_) { return []; }
         }
 
-        function parseSubtitleXml(xml) {
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(xml, 'text/xml');
-            const subtitles = [];
-
-            // Handle standard YouTube XML format (<text start="" dur="">)
-            const textElements = doc.querySelectorAll('text');
-            if (textElements.length > 0) {
-                textElements.forEach(el => {
-                    const start = parseFloat(el.getAttribute('start') || '0');
-                    const dur = parseFloat(el.getAttribute('dur') || '0');
-                    let text = el.textContent || '';
-                    text = decodeHtmlEntities(text).trim();
-                    if (text) {
-                        subtitles.push({ start, dur, text });
-                    }
-                });
-                return subtitles;
-            }
-
-            // Handle srv3 format (<p t="" d="">)
-            const pElements = doc.querySelectorAll('p');
-            pElements.forEach(el => {
-                const start = parseFloat(el.getAttribute('t') || '0') / 1000;
-                const dur = parseFloat(el.getAttribute('d') || '0') / 1000;
-                let text = el.textContent || '';
-                text = decodeHtmlEntities(text).trim();
-                if (text) {
-                    subtitles.push({ start, dur, text });
-                }
-            });
-
-            return subtitles;
-        }
-
-        function decodeHtmlEntities(str) {
-            const textarea = document.createElement('textarea');
-            textarea.innerHTML = str;
-            return textarea.value;
-        }
-
-        function formatTime(seconds) {
-            const h = Math.floor(seconds / 3600);
-            const m = Math.floor((seconds % 3600) / 60);
-            const s = Math.floor(seconds % 60);
-
-            if (h > 0) {
-                return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-            }
-            return `${m}:${String(s).padStart(2, '0')}`;
+        /* ── 표시/복사/다운로드 ── */
+        function formatTime(sec) {
+            const h = Math.floor(sec / 3600);
+            const m = Math.floor((sec % 3600) / 60);
+            const s = Math.floor(sec % 60);
+            return h > 0
+                ? `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+                : `${m}:${String(s).padStart(2, '0')}`;
         }
 
         function renderSubtitles() {
             const box = document.getElementById('subtitleBox');
-            const showTimestamp = document.getElementById('showTimestamp').checked;
+            const ts = document.getElementById('showTimestamp').checked;
 
-            if (showTimestamp) {
-                box.innerHTML = currentSubtitles.map(sub => {
-                    return `<div class="subtitle-line"><span class="timestamp">[${formatTime(sub.start)}]</span>${escapeHtml(sub.text)}</div>`;
-                }).join('');
+            if (ts) {
+                box.innerHTML = currentSubtitles.map(s =>
+                    `<div class="subtitle-line"><span class="timestamp">[${formatTime(s.start)}]</span>${escapeHtml(s.text)}</div>`
+                ).join('');
             } else {
                 box.innerHTML = '';
-                box.textContent = currentSubtitles.map(sub => sub.text).join('\n');
+                box.textContent = currentSubtitles.map(s => s.text).join('\n');
             }
-        }
-
-        function escapeHtml(str) {
-            const div = document.createElement('div');
-            div.textContent = str;
-            return div.innerHTML;
         }
 
         function getPlainText() {
-            const showTimestamp = document.getElementById('showTimestamp').checked;
-            if (showTimestamp) {
-                return currentSubtitles.map(sub => `[${formatTime(sub.start)}] ${sub.text}`).join('\n');
-            }
-            return currentSubtitles.map(sub => sub.text).join('\n');
+            const ts = document.getElementById('showTimestamp').checked;
+            return currentSubtitles.map(s =>
+                ts ? `[${formatTime(s.start)}] ${s.text}` : s.text
+            ).join('\n');
         }
 
         async function copySubtitles() {
             const text = getPlainText();
             const btn = document.getElementById('copyBtn');
-
             try {
                 await navigator.clipboard.writeText(text);
-                btn.textContent = '복사 완료!';
-                btn.classList.add('copied');
-                setTimeout(() => {
-                    btn.textContent = '복사하기';
-                    btn.classList.remove('copied');
-                }, 2000);
-            } catch (err) {
-                // Fallback for older browsers
-                const textarea = document.createElement('textarea');
-                textarea.value = text;
-                textarea.style.position = 'fixed';
-                textarea.style.opacity = '0';
-                document.body.appendChild(textarea);
-                textarea.select();
+            } catch (_) {
+                const ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.cssText = 'position:fixed;opacity:0';
+                document.body.appendChild(ta);
+                ta.select();
                 document.execCommand('copy');
-                document.body.removeChild(textarea);
-
-                btn.textContent = '복사 완료!';
-                btn.classList.add('copied');
-                setTimeout(() => {
-                    btn.textContent = '복사하기';
-                    btn.classList.remove('copied');
-                }, 2000);
+                document.body.removeChild(ta);
             }
+            btn.textContent = '복사 완료!';
+            btn.classList.add('copied');
+            setTimeout(() => {
+                btn.textContent = '복사하기';
+                btn.classList.remove('copied');
+            }, 2000);
         }
 
         function downloadSubtitles() {
-            const text = getPlainText();
-            const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
-            const url = URL.createObjectURL(blob);
+            const blob = new Blob([getPlainText()], { type: 'text/plain;charset=utf-8' });
             const a = document.createElement('a');
-            a.href = url;
+            a.href = URL.createObjectURL(blob);
             a.download = `subtitle_${currentVideoId}.txt`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
-            URL.revokeObjectURL(url);
+            URL.revokeObjectURL(a.href);
         }
 
-        // Allow Enter key to trigger extraction
-        document.getElementById('urlInput').addEventListener('keydown', (e) => {
-            if (e.key === 'Enter') {
-                handleExtract();
-            }
+        document.getElementById('urlInput').addEventListener('keydown', e => {
+            if (e.key === 'Enter') handleExtract();
         });
     </script>
 </body>
