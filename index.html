@@ -214,84 +214,40 @@
             document.getElementById('videoInfo').style.display = 'block';
             document.getElementById('videoTitle').textContent = '';
 
-            setStatus('loading', '자막 정보를 가져오는 중...');
+            setStatus('loading', '자막을 가져오는 중...');
 
             try {
-                const resp = await fetch(`/api/captions/${videoId}`);
-                const data = await resp.json();
+                // 자막 + 제목을 동시에 요청
+                const [captionResp, titleResp] = await Promise.all([
+                    fetch(`/api/captions/${videoId}`),
+                    fetch(`/api/title/${videoId}`),
+                ]);
 
-                if (!resp.ok) throw new Error(data.error || '서버 오류');
+                const captionData = await captionResp.json();
+                const titleData = await titleResp.json();
 
-                if (data.title) {
-                    document.getElementById('videoTitle').textContent = decodeEntities(data.title);
+                if (titleData.title) {
+                    document.getElementById('videoTitle').textContent = titleData.title;
                 }
 
-                if (!data.tracks || data.tracks.length === 0) {
+                if (!captionResp.ok) throw new Error(captionData.error || '서버 오류');
+
+                if (!captionData.subtitles || captionData.subtitles.length === 0) {
                     setStatus('error', '이 영상에는 자막이 없습니다.');
                     document.getElementById('extractBtn').disabled = false;
                     return;
                 }
 
-                captionTracks = data.tracks;
+                currentSubtitles = captionData.subtitles;
+                setStatus('success', `자막 ${currentSubtitles.length}개 항목을 추출했습니다.`);
+                renderSubtitles();
+                document.getElementById('resultSection').style.display = 'block';
 
-                // 드롭다운
-                const dd = document.getElementById('langDropdown');
-                dd.innerHTML = '';
-                captionTracks.forEach((t, i) => {
-                    const opt = document.createElement('option');
-                    opt.value = i;
-                    const auto = t.kind === 'asr' ? ' (자동 생성)' : '';
-                    opt.textContent = t.label + auto;
-                    dd.appendChild(opt);
-                });
-                document.getElementById('languageSelect').style.display = 'block';
-
-                // 한국어 자동 선택
-                const ki = captionTracks.findIndex(t => t.languageCode === 'ko');
-                if (ki !== -1) dd.value = ki;
-
-                await loadSubtitles(dd.value);
             } catch (err) {
                 setStatus('error', '오류: ' + err.message);
             }
 
             document.getElementById('extractBtn').disabled = false;
-        }
-
-        async function handleLanguageChange() {
-            await loadSubtitles(document.getElementById('langDropdown').value);
-        }
-
-        async function loadSubtitles(idx) {
-            setStatus('loading', '자막 내용을 불러오는 중...');
-            try {
-                const track = captionTracks[idx];
-                // 페이지 파싱에서 얻은 서명된 baseUrl을 서버 프록시로 전달
-                const resp = await fetch(`/api/subtitle?url=${encodeURIComponent(track.baseUrl)}`);
-                const text = await resp.text();
-
-                let data;
-                try {
-                    data = JSON.parse(text);
-                } catch (_) {
-                    throw new Error('서버 응답을 파싱할 수 없습니다.');
-                }
-
-                if (data.error) throw new Error(data.error);
-
-                currentSubtitles = data;
-
-                if (currentSubtitles.length === 0) {
-                    setStatus('error', '자막이 비어 있습니다.');
-                    return;
-                }
-
-                setStatus('success', `자막 ${currentSubtitles.length}개 항목을 추출했습니다.`);
-                renderSubtitles();
-                document.getElementById('resultSection').style.display = 'block';
-            } catch (err) {
-                setStatus('error', '자막 로드 실패: ' + err.message);
-            }
         }
 
         /* ── 표시 ── */
