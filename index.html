@@ -233,12 +233,30 @@
                 if (!captionResp.ok) throw new Error(captionData.error || '서버 오류');
 
                 if (!captionData.subtitles || captionData.subtitles.length === 0) {
-                    setStatus('error', '이 영상에는 자막이 없습니다.');
+                    setStatus('error', captionData.error || '이 영상에는 자막이 없습니다.');
                     document.getElementById('extractBtn').disabled = false;
                     return;
                 }
 
                 currentSubtitles = captionData.subtitles;
+
+                // 언어 드롭다운 표시
+                if (captionData.languages && captionData.languages.length > 1) {
+                    const dd = document.getElementById('langDropdown');
+                    dd.innerHTML = '';
+                    captionData.languages.forEach(l => {
+                        const opt = document.createElement('option');
+                        opt.value = l.code;
+                        const auto = l.kind === 'asr' ? ' (자동 생성)' : '';
+                        opt.textContent = l.label + auto;
+                        dd.appendChild(opt);
+                    });
+                    // 현재 로드된 자막의 언어를 선택 상태로
+                    const currentLang = captionData.subtitles[0]?.lang || captionData.languages[0].code;
+                    dd.value = currentLang;
+                    document.getElementById('languageSelect').style.display = 'block';
+                }
+
                 setStatus('success', `자막 ${currentSubtitles.length}개 항목을 추출했습니다.`);
                 renderSubtitles();
                 document.getElementById('resultSection').style.display = 'block';
@@ -248,6 +266,24 @@
             }
 
             document.getElementById('extractBtn').disabled = false;
+        }
+
+        async function handleLanguageChange() {
+            const lang = document.getElementById('langDropdown').value;
+            setStatus('loading', '자막을 가져오는 중...');
+            try {
+                const resp = await fetch(`/api/captions/${currentVideoId}?lang=${lang}`);
+                const data = await resp.json();
+                if (!data.subtitles || data.subtitles.length === 0) {
+                    setStatus('error', '해당 언어의 자막이 비어있습니다.');
+                    return;
+                }
+                currentSubtitles = data.subtitles;
+                setStatus('success', `자막 ${currentSubtitles.length}개 항목을 추출했습니다.`);
+                renderSubtitles();
+            } catch (err) {
+                setStatus('error', '오류: ' + err.message);
+            }
         }
 
         /* ── 표시 ── */
