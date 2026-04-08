@@ -1,5 +1,7 @@
 import express from 'express';
-import Anthropic from '@anthropic-ai/sdk';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const Anthropic = require('@anthropic-ai/sdk').default || require('@anthropic-ai/sdk');
 
 const app = express();
 const PORT = 3000;
