@@ -310,12 +310,12 @@ app.post('/api/summarize', async (req, res) => {
             max_tokens: 1024,
             messages: [{
                 role: 'user',
-                content: `다음은 유튜브 영상 "${title || '(제목 없음)}"의 자막입니다.\n\n` +
-                    `이 영상의 핵심 내용을 한국어로 요약해주세요.\n` +
-                    `- 영상의 주제와 핵심 메시지를 먼저 한 줄로 요약\n` +
-                    `- 주요 내용을 3~5개 bullet point로 정리\n` +
-                    `- 마지막에 한 줄 총평\n\n` +
-                    `자막:\n${truncated}`,
+                content: '다음은 유튜브 영상 [' + (title || '제목 없음') + ']의 자막입니다.\n\n' +
+                    '이 영상의 핵심 내용을 한국어로 요약해주세요.\n' +
+                    '- 영상의 주제와 핵심 메시지를 먼저 한 줄로 요약\n' +
+                    '- 주요 내용을 3~5개 bullet point로 정리\n' +
+                    '- 마지막에 한 줄 총평\n\n' +
+                    '자막:\n' + truncated,
             }],
         });
 
