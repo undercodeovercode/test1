@@ -89,6 +89,28 @@
         .subtitle-options label { display: flex; align-items: center; gap: 6px; color: #aaa; font-size: 14px; cursor: pointer; }
         .subtitle-options input[type="checkbox"] { accent-color: #ff4444; }
 
+        .btn-summarize {
+            padding: 10px 20px; border: none; border-radius: 8px;
+            background: linear-gradient(135deg, #7c3aed, #5b21b6);
+            color: white; font-size: 14px; font-weight: 600;
+            cursor: pointer; transition: opacity 0.2s;
+        }
+        .btn-summarize:hover { opacity: 0.9; }
+        .btn-summarize:disabled { opacity: 0.5; cursor: not-allowed; }
+
+        .summary-section {
+            display: none; margin-top: 24px;
+        }
+        .summary-section h2 {
+            font-size: 20px; font-weight: 600; margin-bottom: 12px;
+            color: #c4b5fd;
+        }
+        .summary-box {
+            background-color: #1a1a2e; border: 1px solid #2a2a4e; border-radius: 12px;
+            padding: 24px; line-height: 1.8; font-size: 15px; color: #e0e0ff;
+            white-space: pre-wrap; word-break: break-word; min-height: 60px;
+        }
+
         .subtitle-box {
             background-color: #1a1a1a; border: 1px solid #333; border-radius: 12px;
             padding: 24px; max-height: 500px; overflow-y: auto;
@@ -147,6 +169,7 @@
             <div class="result-header">
                 <h2>추출된 자막</h2>
                 <div class="result-actions">
+                    <button class="btn-summarize" id="summarizeBtn" onclick="handleSummarize()">AI 요약</button>
                     <button class="btn-copy" id="copyBtn" onclick="copySubtitles()">복사하기</button>
                     <button class="btn-download" onclick="downloadSubtitles()">다운로드</button>
                 </div>
@@ -158,6 +181,11 @@
                 </label>
             </div>
             <div class="subtitle-box" id="subtitleBox"></div>
+        </div>
+
+        <div class="summary-section" id="summarySection">
+            <h2>AI 요약</h2>
+            <div class="summary-box" id="summaryBox"></div>
         </div>
 
         <footer>
@@ -331,6 +359,76 @@
             a.download = `subtitle_${currentVideoId}.txt`;
             document.body.appendChild(a); a.click();
             document.body.removeChild(a); URL.revokeObjectURL(a.href);
+        }
+
+        /*
+         * AI 요약 — Server-Sent Events로 스트리밍 수신
+         *
+         * 왜 SSE인가:
+         *   Claude API 응답은 수 초 걸릴 수 있다.
+         *   일반 fetch는 전체 응답을 기다려야 하지만,
+         *   SSE는 생성되는 텍스트를 실시간으로 화면에 표시할 수 있어
+         *   사용자 체감 대기 시간이 크게 줄어든다.
+         */
+        async function handleSummarize() {
+            if (currentSubtitles.length === 0) return;
+
+            const btn = document.getElementById('summarizeBtn');
+            const section = document.getElementById('summarySection');
+            const box = document.getElementById('summaryBox');
+
+            btn.disabled = true;
+            btn.textContent = '요약 중...';
+            section.style.display = 'block';
+            box.textContent = '';
+
+            const subtitleText = currentSubtitles.map(s => s.text).join(' ');
+            const title = document.getElementById('videoTitle').textContent || '';
+
+            try {
+                const resp = await fetch('/api/summarize', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: subtitleText, title }),
+                });
+
+                // API 키 미설정 등 JSON 에러 응답 처리
+                if (resp.headers.get('content-type')?.includes('application/json')) {
+                    const err = await resp.json();
+                    box.textContent = '오류: ' + (err.error || '알 수 없는 오류');
+                    btn.disabled = false;
+                    btn.textContent = 'AI 요약';
+                    return;
+                }
+
+                // SSE 스트리밍 수신
+                const reader = resp.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop();
+
+                    for (const line of lines) {
+                        if (!line.startsWith('data: ')) continue;
+                        const data = line.slice(6);
+                        if (data === '[DONE]') break;
+                        try {
+                            box.textContent += JSON.parse(data);
+                        } catch (_) {}
+                    }
+                }
+            } catch (err) {
+                box.textContent = '오류: ' + err.message;
+            }
+
+            btn.disabled = false;
+            btn.textContent = 'AI 요약';
         }
 
         document.getElementById('urlInput').addEventListener('keydown', e => {

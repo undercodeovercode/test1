@@ -1,9 +1,11 @@
 import express from 'express';
+import Anthropic from '@anthropic-ai/sdk';
 
 const app = express();
 const PORT = 3000;
 
 app.use(express.static('.'));
+app.use(express.json({ limit: '1mb' }));
 
 /*
  * youtube-transcript 패키지의 핵심 로직을 직접 구현.
@@ -258,6 +260,88 @@ app.get('/api/title/:videoId', async (req, res) => {
     } catch (_) { res.json({ title: '' }); }
 });
 
+/*
+ * POST /api/summarize
+ * body: { text: "자막 전문", title: "영상 제목" }
+ *
+ * 왜 POST인가:
+ *   자막 텍스트가 수만 자일 수 있어 GET 쿼리스트링에 담기 어렵다.
+ *
+ * 왜 서버에서 호출하는가:
+ *   API 키를 클라이언트에 노출하면 누구나 도용할 수 있다.
+ *   서버에서 환경변수로 읽어 안전하게 호출한다.
+ *
+ * 왜 스트리밍인가:
+ *   긴 자막의 요약은 수 초 걸릴 수 있어서,
+ *   Server-Sent Events로 생성되는 텍스트를 실시간 전송하면
+ *   사용자가 기다리지 않고 바로 읽기 시작할 수 있다.
+ */
+app.post('/api/summarize', async (req, res) => {
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+        return res.status(500).json({
+            error: 'ANTHROPIC_API_KEY 환경변수가 설정되지 않았습니다.\n' +
+                   '실행: ANTHROPIC_API_KEY=sk-ant-... npm start',
+        });
+    }
+
+    const { text, title } = req.body;
+    if (!text) return res.status(400).json({ error: '자막 텍스트가 없습니다.' });
+
+    // 토큰 절약을 위해 자막 앞부분만 사용 (약 12000자 ≈ 4000토큰)
+    const truncated = text.length > 12000
+        ? text.substring(0, 12000) + '\n\n... (이하 생략)'
+        : text;
+
+    try {
+        const client = new Anthropic({ apiKey });
+
+        // SSE 헤더 설정 — 스트리밍 응답용
+        res.writeHead(200, {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            Connection: 'keep-alive',
+        });
+
+        const stream = await client.messages.stream({
+            model: 'claude-sonnet-4-20250514',
+            max_tokens: 1024,
+            messages: [{
+                role: 'user',
+                content: `다음은 유튜브 영상 "${title || '(제목 없음)}"의 자막입니다.\n\n` +
+                    `이 영상의 핵심 내용을 한국어로 요약해주세요.\n` +
+                    `- 영상의 주제와 핵심 메시지를 먼저 한 줄로 요약\n` +
+                    `- 주요 내용을 3~5개 bullet point로 정리\n` +
+                    `- 마지막에 한 줄 총평\n\n` +
+                    `자막:\n${truncated}`,
+            }],
+        });
+
+        for await (const event of stream) {
+            if (event.type === 'content_block_delta' && event.delta?.text) {
+                // SSE 형식: data: 텍스트\n\n
+                res.write(`data: ${JSON.stringify(event.delta.text)}\n\n`);
+            }
+        }
+
+        res.write('data: [DONE]\n\n');
+        res.end();
+    } catch (err) {
+        console.error('요약 실패:', err.message);
+        // 아직 헤더를 보내지 않았으면 JSON 에러, 이미 보냈으면 SSE 에러
+        if (!res.headersSent) {
+            res.status(500).json({ error: err.message });
+        } else {
+            res.write(`data: ${JSON.stringify('[오류] ' + err.message)}\n\n`);
+            res.end();
+        }
+    }
+});
+
 app.listen(PORT, () => {
     console.log(`유튜브 자막 추출기 실행 중: http://localhost:${PORT}`);
+    if (!process.env.ANTHROPIC_API_KEY) {
+        console.log('⚠ ANTHROPIC_API_KEY가 설정되지 않았습니다. AI 요약 기능을 사용하려면:');
+        console.log('  ANTHROPIC_API_KEY=sk-ant-... npm start');
+    }
 });
