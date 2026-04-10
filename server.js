@@ -141,12 +141,15 @@ app.get('/api/captions/:videoId', async (req, res) => {
         const xml = await subtitleResp.text();
         console.log(`자막 응답: ${xml.length}바이트, HTTP ${subtitleResp.status}`);
 
-        if (!xml || xml.length === 0) {
-            console.log('빈 응답! 응답 헤더:', Object.fromEntries(subtitleResp.headers));
-            return res.json({ subtitles: [], error: '자막 내용이 비어있습니다.' });
+        if (subtitleResp.status === 429) {
+            return res.json({
+                subtitles: [],
+                error: 'YouTube 요청 제한에 걸렸습니다. 1~2분 후 다시 시도해주세요.',
+            });
         }
-        if (xml.length < 200) {
-            console.log('응답 내용:', xml);
+
+        if (!xml || xml.length === 0) {
+            return res.json({ subtitles: [], error: '자막 내용이 비어있습니다.' });
         }
 
         // 3단계: XML 파싱
