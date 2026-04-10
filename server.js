@@ -66,6 +66,15 @@ const LANG_NAMES = {
     te: 'తెలుగు (텔루구어)',
 };
 
+/*
+ * 트랙 캐시.
+ * 언어를 바꿀 때마다 InnerTube를 다시 호출하면
+ * 새 baseUrl의 서명이 달라져서 실패할 수 있다.
+ * 첫 요청에서 받은 tracks를 캐시해두면
+ * 언어 변경 시 같은 baseUrl을 재사용하여 안정적으로 작동한다.
+ */
+const tracksCache = new Map();
+
 app.get('/api/captions/:videoId', async (req, res) => {
     const { videoId } = req.params;
     const lang = req.query.lang || undefined;
@@ -73,13 +82,22 @@ app.get('/api/captions/:videoId', async (req, res) => {
     try {
         console.log(`\n===== 자막 요청: ${videoId} lang=${lang || '기본'} =====`);
 
-        // 1단계: ANDROID 클라이언트로 InnerTube Player API 호출 → captionTracks 획득
-        let tracks = await getCaptionTracks(videoId);
+        // 캐시된 tracks가 있으면 재사용 (언어 변경 시 InnerTube 재호출 방지)
+        let tracks = tracksCache.get(videoId);
 
-        // ANDROID 실패 시 웹 페이지 파싱 폴백
-        if (!tracks || tracks.length === 0) {
-            console.log('ANDROID InnerTube 실패, 웹 페이지 파싱 시도');
-            tracks = await getCaptionTracksFromPage(videoId);
+        if (!tracks) {
+            tracks = await getCaptionTracks(videoId);
+            if (!tracks || tracks.length === 0) {
+                console.log('ANDROID InnerTube 실패, 웹 페이지 파싱 시도');
+                tracks = await getCaptionTracksFromPage(videoId);
+            }
+            if (tracks && tracks.length > 0) {
+                tracksCache.set(videoId, tracks);
+                // 10분 후 캐시 삭제 (baseUrl의 서명은 시간 제한이 있음)
+                setTimeout(() => tracksCache.delete(videoId), 10 * 60 * 1000);
+            }
+        } else {
+            console.log('캐시된 트랙 사용');
         }
 
         if (!tracks || tracks.length === 0) {
@@ -88,7 +106,6 @@ app.get('/api/captions/:videoId', async (req, res) => {
 
         console.log(`트랙 ${tracks.length}개:`, tracks.map(t => t.languageCode).join(', '));
 
-        // 언어 목록: 원본 자막 + 한국어 자동번역(원본에 없으면 추가)
         const hasKorean = tracks.some(t => t.languageCode === 'ko');
         const languages = tracks.map(t => ({
             code: t.languageCode,
@@ -106,9 +123,9 @@ app.get('/api/captions/:videoId', async (req, res) => {
         // 언어 선택 및 자막 URL 구성
         let fetchUrl;
         if (lang === 'ko' && !hasKorean) {
-            // 한국어 자동 번역: 첫 번째 트랙의 baseUrl에 &tlang=ko 추가
             fetchUrl = tracks[0].baseUrl + '&tlang=ko';
             console.log('한국어 자동 번역 요청');
+            console.log('URL:', fetchUrl.substring(0, 150));
         } else {
             const track = lang
                 ? tracks.find(t => t.languageCode === lang) || tracks[0]
@@ -119,13 +136,17 @@ app.get('/api/captions/:videoId', async (req, res) => {
 
         // 2단계: baseUrl로 자막 XML 가져오기
         const subtitleResp = await fetch(fetchUrl, {
-            headers: { 'User-Agent': WEB_UA },
+            headers: { 'User-Agent': ANDROID_UA },
         });
         const xml = await subtitleResp.text();
-        console.log(`자막 응답: ${xml.length}바이트`);
+        console.log(`자막 응답: ${xml.length}바이트, HTTP ${subtitleResp.status}`);
 
         if (!xml || xml.length === 0) {
+            console.log('빈 응답! 응답 헤더:', Object.fromEntries(subtitleResp.headers));
             return res.json({ subtitles: [], error: '자막 내용이 비어있습니다.' });
+        }
+        if (xml.length < 200) {
+            console.log('응답 내용:', xml);
         }
 
         // 3단계: XML 파싱
